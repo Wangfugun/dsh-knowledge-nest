@@ -3448,7 +3448,7 @@
       const NODE_W = 300;
 
       /** 最多几层（根算第 1 层）。 */
-      const MAX_LEVELS = 3;
+      const MAX_LEVELS = 4;
 
       /** 连线的控制点强度（相对位移比例，0~0.6 之间比较好看）。 */
       const CURVE = 0.5;
@@ -3786,7 +3786,7 @@
                 type: 'button',
                 'data-term': link.label,
                 disabled: expandable !== true,
-                title: expandable === true ? `展开「${link.label}」（Alt+点击＝原地换个解释）` : '最多 3 层，这里不再展开',
+                title: expandable === true ? `展开「${link.label}」（Alt+点击＝原地换个解释）` : '最多 4 层，这里不再展开',
                 text: link.label,
               });
               if (expandable === true) {
@@ -5500,7 +5500,7 @@
               } else if (parentId !== null) {
                 const child = board.addChild(parentId, { id: nodeId, text: title, model: buildPendingCard(phrase) });
                 if (child === null) {
-                  switchEl.flash('最多 3 层，这里不再展开');
+                  switchEl.flash('最多 4 层，这里不再展开');
                   store.patch({ pendingId: '' });
                   return;
                 }
@@ -5670,7 +5670,14 @@
 
               const resolved = input?.range ?? painter.resolve(phrase);
               painter.paint(resolved);
-              runExplain({ phrase, sessionId, rect: input?.rect ?? fallbackRect(), docText: input?.docText });
+              runExplain({
+                phrase,
+                sessionId,
+                rect: input?.rect ?? fallbackRect(),
+                docText: input?.docText,
+                parentId: input?.parentId,
+                nodeId: input?.nodeId,
+              });
             };
 
             /**
@@ -5726,6 +5733,23 @@
              * @param {object} data - 菜单上下文。
              * @returns {void}
              */
+            /**
+             * 选区落在哪张卡片里（用来把新卡片挂成它的子节点）。
+             * @param {Range|null} range - 选区。
+             * @returns {string} 卡片 id；不在卡片里返回空串。
+             */
+            function cardIdAtRange(range) {
+              try {
+                const start = range?.startContainer ?? null;
+                const element = start !== null && start.nodeType === 3 ? start.parentElement : start;
+                const card = element?.closest?.('.knest-tnode') ?? null;
+                const id = card?.getAttribute?.('data-id') ?? '';
+                return typeof id === 'string' ? id : '';
+              } catch {
+                return '';
+              }
+            }
+
             function onMenuAction(action, data) {
               const phrase = normalizePhrase(data?.phrase) || normalizePhrase(data?.selection);
               if (phrase === '' && action !== 'copy') {
