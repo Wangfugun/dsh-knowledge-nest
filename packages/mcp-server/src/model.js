@@ -19,6 +19,22 @@ export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 export const DEEPSEEK_MODEL = 'deepseek-flash';
 export const DEEPSEEK_FALLBACK_MODEL = 'deepseek-v4-pro';
 
+/** 本地推理的默认端点：不花钱，也不需要钥匙。 */
+export const LOCAL_PRESETS = {
+  ollama: { baseUrl: 'http://127.0.0.1:11434/v1', model: '', key: 'ollama' },
+  lmstudio: { baseUrl: 'http://127.0.0.1:1234/v1', model: '', key: 'lmstudio' },
+  vllm: { baseUrl: 'http://127.0.0.1:8000/v1', model: '', key: 'vllm' },
+};
+
+/**
+ * 这个 baseUrl 是不是本地端点（本地端点允许没有钥匙）。
+ * @param {string} baseUrl - 端点。
+ * @returns {boolean} 是否本地。
+ */
+export function isLocalEndpoint(baseUrl) {
+  return /127\.0\.0\.1|localhost|0\.0\.0\.0|::1|host\.docker\.internal/iu.test(String(baseUrl ?? ''));
+}
+
 /** OpenAI 官方兼容端点（只在只给了 OPENAI_API_KEY 时兜底用）。 */
 export const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -95,7 +111,9 @@ function num(value, fallback, min, max) {
 export function resolveModel(env = process.env) {
   const file = readConfigFile(env);
 
-  const openaiKey = text(env?.OPENAI_API_KEY);
+  const presetName = text(env?.KNEST_PROVIDER).toLowerCase();
+  const preset = LOCAL_PRESETS[presetName] ?? null;
+  const openaiKey = text(env?.OPENAI_API_KEY) || (preset === null ? '' : preset.key);
   const deepseekKey = text(env?.DEEPSEEK_API_KEY);
   const fileKey = text(file.apiKey);
 
@@ -112,8 +130,17 @@ export function resolveModel(env = process.env) {
     source = 'config';
   }
 
-  const envBase = text(env?.OPENAI_BASE_URL) || text(env?.DEEPSEEK_BASE_URL);
+  const envBase = text(env?.OPENAI_BASE_URL) || text(env?.DEEPSEEK_BASE_URL) || (preset === null ? '' : preset.baseUrl);
   const fileBase = text(file.baseUrl);
+
+  /* 没有钥匙但端点指向本机：本地推理不需要钥匙，直接放行 */
+  if (source === 'none' && envBase !== '' && isLocalEndpoint(envBase)) {
+    apiKey = preset?.key ?? 'local';
+    source = 'env-openai';
+  } else if (source === 'none' && fileBase !== '' && isLocalEndpoint(fileBase)) {
+    apiKey = 'local';
+    source = 'config';
+  }
   /* 地址跟着 key 的来源走：env 给的 key 就用 env/默认地址，不要把配置文件里的地址混进来。 */
   let baseUrl = '';
   if (source === 'env-openai') baseUrl = envBase || OPENAI_BASE_URL;
@@ -122,7 +149,7 @@ export function resolveModel(env = process.env) {
   baseUrl = baseUrl.replace(/\/+$/u, '');
   const looksDeepSeek = /deepseek/iu.test(baseUrl);
 
-  const envModel = text(env?.OPENAI_MODEL) || text(env?.DEEPSEEK_MODEL);
+  const envModel = text(env?.OPENAI_MODEL) || text(env?.DEEPSEEK_MODEL) || (preset === null ? '' : preset.model);
   const fileModel = text(file.model);
   const fileFallback = text(file.fallbackModel);
 
@@ -141,14 +168,15 @@ export function resolveModel(env = process.env) {
     fallbackModel = fileFallback || (looksDeepSeek ? DEEPSEEK_FALLBACK_MODEL : '');
   }
 
+  const local = isLocalEndpoint(baseUrl);
   return {
     enabled: file.enabled !== false,
-    apiKey,
+    apiKey: apiKey === '' && local ? (preset?.key ?? 'local') : apiKey,
     baseUrl,
     model,
     fallbackModel,
-    maxTokens: num(file.maxTokens, DEFAULT_MAX_TOKENS, 200, 4000),
-    timeoutMs: num(file.timeoutMs, DEFAULT_TIMEOUT_MS, 5_000, 180_000),
+    maxTokens: num(env?.KNEST_MAX_TOKENS ?? file.maxTokens, DEFAULT_MAX_TOKENS, 200, 4000),
+    timeoutMs: num(env?.KNEST_TIMEOUT_MS ?? file.timeoutMs, DEFAULT_TIMEOUT_MS, 5_000, 600_000),
     source,
   };
 }
