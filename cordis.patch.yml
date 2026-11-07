@@ -1,0 +1,6 @@
+# dsh-knowledge-nest —— loader 插入项
+#
+# 装法：把下面这段加到 ~/.dsh/profiles/desktop/cordis.patch.yml 末尾（见 README）。
+- insert:
+    - id: dsh-knowledge-nest
+      name: dsh-knowledge-nest

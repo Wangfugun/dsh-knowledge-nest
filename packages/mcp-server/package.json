@@ -1,0 +1,26 @@
+{
+  "name": "@knest/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "knowledge_nest_explain as an MCP tool: explain what a word or sentence means inside a given conversation, using an OpenAI-compatible chat API.",
+  "bin": {
+    "knest-mcp": "src/index.js"
+  },
+  "main": "src/server.js",
+  "exports": {
+    ".": "./src/server.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "inspect:list": "npx --yes @modelcontextprotocol/inspector --cli node src/index.js --method tools/list"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^3.25.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

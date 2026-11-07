@@ -1,0 +1,8 @@
+node_modules/
+packages/*/node_modules/
+dist/
+preview/
+*.log
+*.tmp
+.DS_Store
+docs/assets/*.html

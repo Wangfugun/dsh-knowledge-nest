@@ -1,0 +1,59 @@
+{
+  "name": "dsh-knowledge-nest",
+  "version": "2.0.0",
+  "description": "词林：在 DeepSeek Harness 的对话里圈一个词，问清它在这段对话里指什么，并顺着它长成一棵知识树。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "conversation-view",
+    "contextual-explanation",
+    "selection",
+    "flow-map"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "client",
+    "lib",
+    "test",
+    "tools",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node tools/build-client.mjs",
+    "test": "node --test",
+    "smoke": "node tools/smoke-model.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-session"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_NAME/dsh-knowledge-nest.git"
+  },
+  "homepage": "https://github.com/YOUR_NAME/dsh-knowledge-nest#readme",
+  "bugs": {
+    "url": "https://github.com/YOUR_NAME/dsh-knowledge-nest/issues"
+  }
+}
