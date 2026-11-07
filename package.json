@@ -1,6 +1,6 @@
 {
   "name": "dsh-knowledge-nest",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "词林：在 DeepSeek Harness 的对话里圈一个词，问清它在这段对话里指什么，并顺着它长成一棵知识树。",
   "keywords": [
     "dsh",
