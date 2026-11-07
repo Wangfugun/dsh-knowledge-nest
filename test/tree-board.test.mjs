@@ -100,18 +100,19 @@ test('画布 DOM：真建节点 + 真画线，d 属性带正确坐标', () => {
   assert.ok(board.edgePath('a', 'b').endsWith(' 90 260'));
 });
 
-test('画布：最多 3 层，第 4 层加不进去', () => {
+test('画布：最多 4 层，第 5 层加不进去', () => {
   const { doc } = createFakeDom();
   const board = createTreeBoard({ doc });
   board.mount();
   board.openRoot({ id: 'l1', text: '一', model: {} });
   board.addChild('l1', { id: 'l2', text: '二', model: {} });
   board.addChild('l2', { id: 'l3', text: '三', model: {} });
-  assert.equal(board.count(), 3);
-  assert.equal(MAX_LEVELS, 3);
-  const fourth = board.addChild('l3', { id: 'l4', text: '四', model: {} });
-  assert.equal(fourth, null, '第 4 层必须被拒绝');
-  assert.equal(board.count(), 3);
+  board.addChild('l3', { id: 'l4', text: '四', model: {} });
+  assert.equal(board.count(), 4);
+  assert.equal(MAX_LEVELS, 4);
+  const fifth = board.addChild('l4', { id: 'l5', text: '五', model: {} });
+  assert.equal(fifth, null, '第 5 层必须被拒绝');
+  assert.equal(board.count(), 4);
 });
 
 test('画布：删父节点连带删掉后代', () => {
