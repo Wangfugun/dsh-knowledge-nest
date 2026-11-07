@@ -1309,8 +1309,11 @@ export function createPlugin(env) {
           case 'copy':
             copyText(data?.selection || phrase, '已复制');
             return;
-          case 'query':
-            pickPhrase({ phrase, range: null, rect, docText })
+          case 'query': {
+            const parentId = typeof data?.cardId === 'string' ? data.cardId : '';
+            pickPhrase({ phrase, range: null, rect, docText, parentId });
+            return;
+          }
             return;
           case 'rephrase':
             runExplain({ phrase, sessionId, rect, mode: 'rephrase', parentId: variantParent() });
@@ -1428,6 +1431,7 @@ export function createPlugin(env) {
             return;
           }
           const resolved = range ?? painter.resolve(clean);
+          const cardId = cardIdAtRange(resolved);
           painter.paint(resolved);
           /* 拖完只出菜单：查询 / 换个说法 / 批注都由你点，绝不自动发请求。 */
           menu.show(rect, {
@@ -1440,6 +1444,7 @@ export function createPlugin(env) {
             hasDomain: Boolean(store.get().cards?.['n-' + hashString(phraseKey(clean))]?.domain),
             queryLabel: isCodeLike(clean) ? '解释这段代码' : '解释这段文本',
             docText,
+            cardId,
           });
           /* 收掉选区：否则残留的选区会让卡片拖动被判定为"正在选字"而被忽略 */
           try {
@@ -1470,11 +1475,13 @@ export function createPlugin(env) {
         const view = doc?.defaultView;
         let selection = '';
         let rect = null;
+        let pickedRange = null;
         try {
           const sel = view?.getSelection?.();
           if (sel !== null && sel !== undefined && sel.rangeCount > 0) {
             selection = String(sel.toString()).trim();
-            const box = sel.getRangeAt(0).getBoundingClientRect();
+            pickedRange = sel.getRangeAt(0);
+            const box = pickedRange.getBoundingClientRect();
             if (box.width > 0 || box.height > 0) rect = box;
           }
         } catch {
@@ -1505,6 +1512,7 @@ export function createPlugin(env) {
           hasExplain: Boolean(store.get().cards?.['n-' + hashString(phraseKey(phrase))]),
           hasDomain: Boolean(store.get().cards?.['n-' + hashString(phraseKey(phrase))]?.domain),
           queryLabel: isCodeLike(selection || phrase) ? '解释这段代码' : '解释这段文本',
+          cardId: cardIdAtRange(pickedRange),
         });
       }
 
