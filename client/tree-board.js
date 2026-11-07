@@ -15,7 +15,7 @@
 export const NODE_W = 300;
 
 /** 最多几层（根算第 1 层）。 */
-export const MAX_LEVELS = 3;
+export const MAX_LEVELS = 4;
 
 /** 连线的控制点强度（相对位移比例，0~0.6 之间比较好看）。 */
 const CURVE = 0.5;
@@ -353,7 +353,7 @@ export function createTreeBoard(options = {}) {
           type: 'button',
           'data-term': link.label,
           disabled: expandable !== true,
-          title: expandable === true ? `展开「${link.label}」（Alt+点击＝原地换个解释）` : '最多 3 层，这里不再展开',
+          title: expandable === true ? `展开「${link.label}」（Alt+点击＝原地换个解释）` : '最多 4 层，这里不再展开',
           text: link.label,
         });
         if (expandable === true) {
