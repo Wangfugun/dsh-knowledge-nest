@@ -14,6 +14,7 @@ import { readConfig, writeConfig, parseShortcut, matchShortcut, shortcutFromEven
 import { attachSelector } from '../client/selector.js';
 import { createMenu, menuItemsFor } from '../client/menu.js';
 import { searchCards } from '../client/library.js';
+import { contextAroundRange } from '../client/phrase.js';
 
 test('cleanMarkdown：记号去掉，正文留下', () => {
   const raw = '## 标题\n\n**粗**、`代码`、[链接](http://x)\n\n```js\nconst a = 1;\n```\n';
@@ -466,4 +467,18 @@ test('searchCards：词 / 释义 / 原文 / 领域 四个字段都参与匹配',
   assert.equal(searchCards(cards, '').length, 2, '空关键词返回全部');
   assert.equal(searchCards(cards, '不存在').length, 0);
   assert.equal(searchCards(cards, '', { domain: '工程' }).length, 1, '领域过滤');
+});
+
+test('contextAroundRange：从句子里取周边原文，词不在时退化为开头一段', () => {
+  const text = '粘度是流体的内摩擦，单位 Pa·s，物理意义是速度梯度为一层时单位面积上的摩擦力。';
+  const range = {
+    startContainer: { nodeType: 1, tagName: 'P', textContent: text, parentNode: null },
+  };
+  const got = contextAroundRange(range, '内摩擦', 10);
+  assert.ok(got.includes('内摩擦'), got);
+  assert.ok(got.length <= text.length);
+
+  const miss = contextAroundRange(range, '不存在的词', 5);
+  assert.equal(typeof miss, 'string');
+  assert.equal(contextAroundRange(null, 'x'), '');
 });

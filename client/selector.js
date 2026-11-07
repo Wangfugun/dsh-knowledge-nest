@@ -138,7 +138,7 @@ export function attachSelector(doc, handlers = {}) {
       }
       const rect = rectOf(range, event);
       try {
-        handlers.onPick?.({ phrase, sentence: phrase, range, rect, button: startButton, dragged: true });
+        handlers.onPick?.({ phrase, sentence: phrase, range, rect, button: startButton, dragged: true, docText: contextAroundRange(range, phrase) });
       } catch (error) {
         /* 不要静默：上一版菜单构建抛错被这里吞掉，表现成「右键没反应」。 */
         warnOnce(error);

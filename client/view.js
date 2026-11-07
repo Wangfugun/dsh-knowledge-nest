@@ -1014,11 +1014,15 @@ export function createPlugin(env) {
         const parentNode = parentId === null ? null : board.nodes.find((node) => node.id === parentId) ?? null;
         const parentBlock = parentNode === null ? '' : parentContextOf(parentNode);
         const windowed = buildContext(messages, { phrase, depth });
-        const context = parentBlock === ''
+        /* 选区若来自右侧打开的文档（MD/PPT），把那段周边原文也带上 */
+        const docBlock = typeof input?.docText === 'string' && input.docText.trim() !== ''
+          ? `【文档原文】${input.docText.trim()}`
+          : '';
+        const head = [docBlock, parentBlock].filter((item) => item !== '').join('\n\n');
+        const context = head === ''
           ? windowed.context
-          : `${parentBlock}\n\n对话原文：\n${windowed.context}`;
-        /* 上下文变了，指纹必须跟着变，否则不同父节点会共用一条缓存。 */
-        const fingerprint = parentBlock === ''
+          : `${head}\n\n对话原文：\n${windowed.context}`;
+        const fingerprint = head === ''
           ? windowed.fingerprint
           : hashString(`${phrase}\u0000${context}`);
         const baseId = input.nodeId ?? `n-${hashString(phraseKey(phrase))}`;
@@ -1205,7 +1209,7 @@ export function createPlugin(env) {
 
         const resolved = input?.range ?? painter.resolve(phrase);
         painter.paint(resolved);
-        runExplain({ phrase, sessionId, rect: input?.rect ?? fallbackRect() });
+        runExplain({ phrase, sessionId, rect: input?.rect ?? fallbackRect(), docText: input?.docText });
       };
 
       /**
@@ -1268,6 +1272,7 @@ export function createPlugin(env) {
           return;
         }
         const rect = data?.rect ?? fallbackRect();
+        const docText = typeof data?.docText === 'string' ? data.docText : '';
         const sessionId = sessionNow();
         const baseId = `n-${hashString(phraseKey(phrase))}`;
         const card = store.get().cards?.[baseId];
@@ -1281,7 +1286,7 @@ export function createPlugin(env) {
             copyText(data?.selection || phrase, '已复制');
             return;
           case 'query':
-            pickPhrase({ phrase, range: null, rect });
+            pickPhrase({ phrase, range: null, rect, docText })
             return;
           case 'rephrase':
             runExplain({ phrase, sessionId, rect, mode: 'rephrase', parentId: variantParent() });
@@ -1326,7 +1331,9 @@ export function createPlugin(env) {
           case 'mark-domain': {
             const domain = typeof card?.domain === 'string' ? card.domain.trim() : '';
             if (domain === '') {
-              switchEl.flash('这个词还没有领域信息，先解释一次');
+              /* 老缓存里没有 domain：就地重跑一次拿到领域，提示用户再点 */
+              runExplain({ phrase, sessionId, rect, docText, force: true });
+              switchEl.flash('正在补判定领域，解释回来后再点一次「标出同领域」');
               return;
             }
             markDomain(domain);
@@ -1382,7 +1389,7 @@ export function createPlugin(env) {
           if (range !== null) painter.paint(range);
         },
         onPick: (payload) => {
-          const { phrase, range, rect } = payload;
+          const { phrase, range, rect, docText } = payload;
           const clean = normalizePhrase(phrase);
           if (clean === '') return;
           syncMarks();
@@ -1408,6 +1415,7 @@ export function createPlugin(env) {
             hasExplain: Boolean(store.get().cards?.['n-' + hashString(phraseKey(clean))]),
             hasDomain: Boolean(store.get().cards?.['n-' + hashString(phraseKey(clean))]?.domain),
             queryLabel: isCodeLike(clean) ? '解释这段代码' : '解释这段文本',
+            docText,
           });
           /* 收掉选区：否则残留的选区会让卡片拖动被判定为"正在选字"而被忽略 */
           try {

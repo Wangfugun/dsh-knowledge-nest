@@ -591,6 +591,43 @@
         return typeof phrase === 'string' ? phrase.replace(/\s+/gu, ' ').trim().toLowerCase() : '';
       }
 
+      /**
+       * 取选区所在区块的周边原文（给"文档里的词"当上下文）。
+       *
+       * 为什么需要：右侧打开的那份 MD/PPT，多半不在对话消息里；
+       * 只喂对话，模型会说"没有上下文"。这里把选区所在段落/列表项的正文取出来，
+       * 以选中的词为中心切前后各 window 个字。
+       *
+       * @param {Range|null} range - 选区。
+       * @param {string} phrase - 选中的词。
+       * @param {number} [window] - 前后各取多少字。
+       * @returns {string} 周边原文；拿不到返回空串。
+       */
+      function contextAroundRange(range, phrase, window = 400) {
+        const needle = typeof phrase === 'string' ? phrase.trim() : '';
+        if (range === null || range === undefined || needle === '') return '';
+        try {
+          let node = range.startContainer ?? null;
+          if (node !== null && node.nodeType === 3) node = node.parentNode;
+          /* 往上找最近的块级容器：段落、列表项、表格单元格、代码块都算 */
+          let block = node;
+          for (let depth = 0; depth < 6 && block !== null; depth += 1) {
+            const tag = String(block.tagName ?? '').toUpperCase();
+            if (['P', 'LI', 'TD', 'TH', 'PRE', 'CODE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'DIV', 'SECTION'].includes(tag)) break;
+            block = block.parentNode;
+          }
+          const raw = String(block?.textContent ?? '').replace(/\s+/gu, ' ').trim();
+          if (raw === '') return '';
+          const at = raw.indexOf(needle);
+          if (at < 0) return raw.slice(0, window * 2);
+          const from = Math.max(0, at - window);
+          const to = Math.min(raw.length, at + needle.length + window);
+          return `${from > 0 ? '…' : ''}${raw.slice(from, to)}${to < raw.length ? '…' : ''}`;
+        } catch {
+          return '';
+        }
+      }
+
       /* ===== client/transcript.js ===== */
       /**
        * 会话快照 → 消息列表 → 喂给模型的上下文。
@@ -2246,7 +2283,7 @@
             }
             const rect = rectOf(range, event);
             try {
-              handlers.onPick?.({ phrase, sentence: phrase, range, rect, button: startButton, dragged: true });
+              handlers.onPick?.({ phrase, sentence: phrase, range, rect, button: startButton, dragged: true, docText: contextAroundRange(range, phrase) });
             } catch (error) {
               /* 不要静默：上一版菜单构建抛错被这里吞掉，表现成「右键没反应」。 */
               warnOnce(error);
@@ -5438,11 +5475,15 @@
               const parentNode = parentId === null ? null : board.nodes.find((node) => node.id === parentId) ?? null;
               const parentBlock = parentNode === null ? '' : parentContextOf(parentNode);
               const windowed = buildContext(messages, { phrase, depth });
-              const context = parentBlock === ''
+              /* 选区若来自右侧打开的文档（MD/PPT），把那段周边原文也带上 */
+              const docBlock = typeof input?.docText === 'string' && input.docText.trim() !== ''
+                ? `【文档原文】${input.docText.trim()}`
+                : '';
+              const head = [docBlock, parentBlock].filter((item) => item !== '').join('\n\n');
+              const context = head === ''
                 ? windowed.context
-                : `${parentBlock}\n\n对话原文：\n${windowed.context}`;
-              /* 上下文变了，指纹必须跟着变，否则不同父节点会共用一条缓存。 */
-              const fingerprint = parentBlock === ''
+                : `${head}\n\n对话原文：\n${windowed.context}`;
+              const fingerprint = head === ''
                 ? windowed.fingerprint
                 : hashString(`${phrase}\u0000${context}`);
               const baseId = input.nodeId ?? `n-${hashString(phraseKey(phrase))}`;
@@ -5629,7 +5670,7 @@
 
               const resolved = input?.range ?? painter.resolve(phrase);
               painter.paint(resolved);
-              runExplain({ phrase, sessionId, rect: input?.rect ?? fallbackRect() });
+              runExplain({ phrase, sessionId, rect: input?.rect ?? fallbackRect(), docText: input?.docText });
             };
 
             /**
@@ -5692,6 +5733,7 @@
                 return;
               }
               const rect = data?.rect ?? fallbackRect();
+              const docText = typeof data?.docText === 'string' ? data.docText : '';
               const sessionId = sessionNow();
               const baseId = `n-${hashString(phraseKey(phrase))}`;
               const card = store.get().cards?.[baseId];
@@ -5705,7 +5747,7 @@
                   copyText(data?.selection || phrase, '已复制');
                   return;
                 case 'query':
-                  pickPhrase({ phrase, range: null, rect });
+                  pickPhrase({ phrase, range: null, rect, docText })
                   return;
                 case 'rephrase':
                   runExplain({ phrase, sessionId, rect, mode: 'rephrase', parentId: variantParent() });
@@ -5750,7 +5792,9 @@
                 case 'mark-domain': {
                   const domain = typeof card?.domain === 'string' ? card.domain.trim() : '';
                   if (domain === '') {
-                    switchEl.flash('这个词还没有领域信息，先解释一次');
+                    /* 老缓存里没有 domain：就地重跑一次拿到领域，提示用户再点 */
+                    runExplain({ phrase, sessionId, rect, docText, force: true });
+                    switchEl.flash('正在补判定领域，解释回来后再点一次「标出同领域」');
                     return;
                   }
                   markDomain(domain);
@@ -5806,7 +5850,7 @@
                 if (range !== null) painter.paint(range);
               },
               onPick: (payload) => {
-                const { phrase, range, rect } = payload;
+                const { phrase, range, rect, docText } = payload;
                 const clean = normalizePhrase(phrase);
                 if (clean === '') return;
                 syncMarks();
@@ -5832,6 +5876,7 @@
                   hasExplain: Boolean(store.get().cards?.['n-' + hashString(phraseKey(clean))]),
                   hasDomain: Boolean(store.get().cards?.['n-' + hashString(phraseKey(clean))]?.domain),
                   queryLabel: isCodeLike(clean) ? '解释这段代码' : '解释这段文本',
+                  docText,
                 });
                 /* 收掉选区：否则残留的选区会让卡片拖动被判定为"正在选字"而被忽略 */
                 try {

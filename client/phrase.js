@@ -132,3 +132,40 @@ export function rangeBetween(doc, start, end) {
 export function phraseKey(phrase) {
   return typeof phrase === 'string' ? phrase.replace(/\s+/gu, ' ').trim().toLowerCase() : '';
 }
+
+/**
+ * 取选区所在区块的周边原文（给"文档里的词"当上下文）。
+ *
+ * 为什么需要：右侧打开的那份 MD/PPT，多半不在对话消息里；
+ * 只喂对话，模型会说"没有上下文"。这里把选区所在段落/列表项的正文取出来，
+ * 以选中的词为中心切前后各 window 个字。
+ *
+ * @param {Range|null} range - 选区。
+ * @param {string} phrase - 选中的词。
+ * @param {number} [window] - 前后各取多少字。
+ * @returns {string} 周边原文；拿不到返回空串。
+ */
+export function contextAroundRange(range, phrase, window = 400) {
+  const needle = typeof phrase === 'string' ? phrase.trim() : '';
+  if (range === null || range === undefined || needle === '') return '';
+  try {
+    let node = range.startContainer ?? null;
+    if (node !== null && node.nodeType === 3) node = node.parentNode;
+    /* 往上找最近的块级容器：段落、列表项、表格单元格、代码块都算 */
+    let block = node;
+    for (let depth = 0; depth < 6 && block !== null; depth += 1) {
+      const tag = String(block.tagName ?? '').toUpperCase();
+      if (['P', 'LI', 'TD', 'TH', 'PRE', 'CODE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'DIV', 'SECTION'].includes(tag)) break;
+      block = block.parentNode;
+    }
+    const raw = String(block?.textContent ?? '').replace(/\s+/gu, ' ').trim();
+    if (raw === '') return '';
+    const at = raw.indexOf(needle);
+    if (at < 0) return raw.slice(0, window * 2);
+    const from = Math.max(0, at - window);
+    const to = Math.min(raw.length, at + needle.length + window);
+    return `${from > 0 ? '…' : ''}${raw.slice(from, to)}${to < raw.length ? '…' : ''}`;
+  } catch {
+    return '';
+  }
+}
