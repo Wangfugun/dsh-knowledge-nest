@@ -3444,9 +3444,11 @@ function mountKnest(options = {}) {
     style.textContent = KNEST_CSS;
     (doc.head ?? doc.documentElement).appendChild(style);
   }
-  if (doc.documentElement.getAttribute('data-knest-theme') === null) {
-    doc.documentElement.setAttribute('data-knest-theme', 'dark');
-  }
+  /* 跟着宿主的明暗走：读页面背景亮度，别硬写 dark */
+  stampTheme(doc, detectTheme(doc));
+  const stopTheme = typeof watchTheme === 'function'
+    ? watchTheme(doc, (next) => stampTheme(doc, next))
+    : () => {};
 
   const painter = createPainter(doc);
   let flashToast = null;
@@ -3615,6 +3617,11 @@ function mountKnest(options = {}) {
     }
     board.dispose();
     annotator.dispose();
+    try {
+      stopTheme?.();
+    } catch {
+      /* 忽略 */
+    }
     doc.getElementById('knest-style')?.remove?.();
     delete win[GLOBAL_KEY];
   }
