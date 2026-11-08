@@ -8,6 +8,8 @@
  * 注入进来的界面正好是这种来源；外部网页的 Origin 是域名，会被拒。
  */
 
+import { createAppearanceSection } from './appearance.js';
+import { t } from './i18n.js';
 /** 面板的 class 前缀。 */
 const PREFIX = 'knest-set';
 
@@ -33,19 +35,20 @@ export function createSettings(options = {}) {
   root.setAttribute('data-open', 'false');
   root.innerHTML = `
     <div class="knest-set-head">
-      <b>词林 · 设置</b>
-      <button class="knest-set-x" type="button" title="关闭">×</button>
+      <b data-i18n="词林 · 设置">词林 · 设置</b>
+      <button class="knest-set-x" type="button" title="${t('关闭')}">×</button>
     </div>
-    <div class="knest-set-status">正在读取…</div>
+    <div class="knest-set-status" data-i18n="正在读取…">正在读取…</div>
+    <div class="knest-set-look"></div>
     <div class="knest-set-presets"></div>
     <div class="knest-set-fields">
-      <label>接口地址<input class="knest-set-url" spellcheck="false" placeholder="https://api.deepseek.com"></label>
-      <label>模型名<input class="knest-set-model" spellcheck="false" placeholder="deepseek-flash"></label>
-      <label class="knest-set-key-row">钥匙<input class="knest-set-key" type="password" spellcheck="false" placeholder="sk-..."></label>
+      <label><span data-i18n="接口地址">接口地址</span><input class="knest-set-url" spellcheck="false" placeholder="https://api.deepseek.com"></label>
+      <label><span data-i18n="模型名">模型名</span><input class="knest-set-model" spellcheck="false" placeholder="deepseek-flash"></label>
+      <label class="knest-set-key-row"><span data-i18n="钥匙">钥匙</span><input class="knest-set-key" type="password" spellcheck="false" placeholder="sk-..."></label>
     </div>
     <div class="knest-set-actions">
-      <button class="knest-set-save" type="button">保存并测试</button>
-      <button class="knest-set-test" type="button">只测试</button>
+      <button class="knest-set-save" type="button" data-i18n="保存并测试">保存并测试</button>
+      <button class="knest-set-test" type="button" data-i18n="只测试">只测试</button>
     </div>
     <div class="knest-set-msg" data-kind=""></div>
   `;
@@ -53,6 +56,17 @@ export function createSettings(options = {}) {
 
   const $ = (selector) => root.querySelector(selector);
   const statusEl = $('.knest-set-status');
+
+  /* 外观三个滑块：只改本地偏好，不碰模型配置 */
+  const lookHost = $('.knest-set-look');
+  const appearance = createAppearanceSection({ doc, onChange: () => {} });
+  if (lookHost) {
+    lookHost.appendChild(appearance.el);
+    const lab = doc.createElement('div');
+    lab.className = 'knest-set-path';
+    lab.textContent = t('下面的模型配置和上面这些互不影响');
+    lookHost.appendChild(lab);
+  }
   const presetsEl = $('.knest-set-presets');
   const msgEl = $('.knest-set-msg');
 
@@ -62,6 +76,17 @@ export function createSettings(options = {}) {
    * @param {string} text - 文案。
    * @returns {void}
    */
+  /**
+   * 把所有带 data-i18n 的节点按当前语言重写。
+   * 切语言时调它，不重建 DOM，用户正在填的输入不会丢。
+   * @returns {void}
+   */
+  const retranslate = () => {
+    for (const el of root.querySelectorAll('[data-i18n]')) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    }
+  };
+
   const say = (kind, text) => {
     msgEl.dataset.kind = kind;
     msgEl.textContent = text;
@@ -77,9 +102,9 @@ export function createSettings(options = {}) {
     state = next;
     const eff = next.effective ?? {};
     statusEl.innerHTML = ''
-      + `<div>当前生效 <b>${escapeHtml(eff.baseUrl || '（未配置）')}</b></div>`
-      + `<div>模型 <b>${escapeHtml(eff.model || '（无）')}</b>　钥匙 ${escapeHtml(eff.keyMasked || '（无）')}</div>`
-      + `<div class="knest-set-path">配置目录 ${escapeHtml(next.home ?? '')}</div>`;
+      + `<div>${t('当前生效')} <b>${escapeHtml(eff.baseUrl || t('（未配置）'))}</b></div>`
+      + `<div>${t('模型')} <b>${escapeHtml(eff.model || t('（无）'))}</b>　${t('钥匙')} ${escapeHtml(eff.keyMasked || t('（无）'))}</div>`
+      + `<div class="knest-set-path">${t('配置目录')} ${escapeHtml(next.home ?? '')}</div>`;
   };
 
   /**
@@ -112,7 +137,7 @@ export function createSettings(options = {}) {
     keyRow.dataset.optional = preset.needsKey === false ? '1' : '0';
     const savedKey = state?.saved?.apiKeyMasked ?? '';
     if (preset.needsKey === false) {
-      $('.knest-set-key').placeholder = '不用填';
+      $('.knest-set-key').placeholder = t('不用填');
     } else if (savedKey !== '') {
       /* 已经存过：告诉用户留空就沿用，别让他以为丢了 */
       $('.knest-set-key').placeholder = `已保存 ${savedKey}，留空则沿用`;
@@ -169,7 +194,7 @@ export function createSettings(options = {}) {
       }
       say('', '');
     } catch (error) {
-      statusEl.innerHTML = '<div>读不到配置服务</div>';
+      statusEl.innerHTML = `<div>${t('读不到配置服务')}</div>`;
       say('bad', `配置服务没响应（${base}）。请确认 MCP server 正在运行。`);
     }
   }
@@ -180,11 +205,11 @@ export function createSettings(options = {}) {
   $('.knest-set-save').addEventListener('click', async () => {
     const button = $('.knest-set-save');
     button.disabled = true;
-    say('', '正在保存…');
+    say('', t('正在保存…'));
     try {
       const saved = await call('/save', form());
       if (saved.ok !== true) {
-        say('bad', saved.message ?? '保存失败');
+        say('bad', saved.message ?? t('保存失败'));
         return;
       }
       paintStatus(saved.state);
@@ -228,6 +253,7 @@ export function createSettings(options = {}) {
    */
   function open() {
     root.setAttribute('data-open', 'true');
+    retranslate();
     refresh();
   }
 
@@ -262,7 +288,7 @@ export function createSettings(options = {}) {
     root.remove();
   }
 
-  return { open, close, toggle, isOpen, refresh, dispose, el: root };
+  return { open, close, toggle, isOpen, refresh, retranslate, dispose, el: root };
 }
 
 /**
