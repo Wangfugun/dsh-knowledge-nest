@@ -26,7 +26,7 @@ async function call(method, path, body) {
   return res.status === 204 ? {} : res.json();
 }
 
-const files = execFileSync('git', ['diff', '--name-only', since, 'HEAD'], { encoding: 'utf8' })
+const files = execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--name-only', since, 'HEAD'], { encoding: 'utf8' })
   .split('\n')
   .map((line) => line.trim())
   .filter((line) => line !== '');
