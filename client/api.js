@@ -1,3 +1,4 @@
+import { readPrefs } from './prefs.js';
 /**
  * 浏览器侧的模型客户端：**只打本插件自己的 host 路由**，从不直连模型。
  *
@@ -110,11 +111,14 @@ export function createExplainApi(options = {}) {
       const phrase = typeof input?.phrase === 'string' ? input.phrase.trim() : '';
       if (phrase === '') return { ok: false, error: { code: 'bad-request', message: '没有圈出文本', retryable: false } };
       const mode = typeof input?.mode === 'string' && input.mode !== '' ? input.mode : 'default';
-      const key = `${input?.sessionId ?? ''}|${phrase}|${input?.fingerprint ?? ''}|${mode}`;
+      const prefsForCache = readPrefs();
+      const key = `${input?.sessionId ?? ''}|${phrase}|${input?.fingerprint ?? ''}|${mode}|${prefsForCache.lang}|${prefsForCache.charLimit}`;
       if (input?.force !== true) {
         const hit = memory.get(key);
         if (hit !== undefined) return { ...hit, cached: true };
       }
+      /* 语言与字数跟着面板走：用户切了语言，下一次解释就用那个语言答。 */
+      const prefs = readPrefs();
       const payload = await send('POST', {
         phrase,
         sentence: typeof input?.sentence === 'string' ? input.sentence : '',
@@ -122,6 +126,8 @@ export function createExplainApi(options = {}) {
         fingerprint: typeof input?.fingerprint === 'string' ? input.fingerprint : '',
         model: typeof input?.model === 'string' ? input.model : '',
         mode,
+        lang: prefs.lang,
+        limit: prefs.charLimit,
       });
       if (payload.ok === true && payload.data !== null && typeof payload.data === 'object') {
         const result = { ok: true, data: payload.data, cached: payload.cached === true, model: payload.model, ms: payload.ms };
