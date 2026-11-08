@@ -278,6 +278,1427 @@ function watchTheme(doc, onChange) {
 }
 
 
+/* ===== client/prefs.js ===== */
+/**
+ * 词林 · 外观与行为偏好
+ *
+ * 三件事都从这里出：
+ *   1. 六套外观（含一套彩虹渐变发光边框）
+ *   2. 三档卡片尺寸
+ *   3. 三档解释详细度
+ *
+ * 所有选择存进 localStorage，刷新后还在。切换时给 <html> 打
+ * data-knest-skin / data-knest-size / data-knest-depth，样式全在 CSS 里。
+ */
+
+/** 外观清单。id 会写进 data-knest-skin。 */
+const THEMES = Object.freeze([
+  { id: 'ink', label: '深灰', note: '直角，无阴影' },
+  { id: 'nebula', label: '彩虹', note: '渐变描边，唯一带发光的一套' },
+  { id: 'neon', label: '青', note: '切角，单色' },
+  { id: 'jade', label: '浅玉', note: '浅底深字，大圆角' },
+  { id: 'paper', label: '纸白', note: '纸色，靠字距' },
+  { id: 'mono', label: '琥珀', note: '等宽，琥珀屏' },
+]);
+
+/** 尺寸档。影响卡片宽、字号、行距、圆角。 */
+const SIZES = Object.freeze([
+  { id: 'sm', label: '小', note: '宽 280，13 号字' },
+  { id: 'md', label: '中', note: '宽 360，14 号字' },
+  { id: 'lg', label: '大', note: '宽 460，16 号字' },
+]);
+
+/** 详细度。直接决定提示词里允许多少字。 */
+/**
+ * 解释长度：连续区间，不是三档。
+ *
+ * 之前是简洁/正常/详细三档，滑起来只有三个落点，手感很硬。
+ * 改成 20 到 500 字的连续滑块，每一格都能停。
+ */
+const CHAR_RANGE = Object.freeze({ min: 20, max: 500, step: 10, def: 90 });
+
+/**
+ * 按字数给个口头档位，只为显示，不影响实际取值。
+ * @param {number} n - 字数。
+ * @returns {string} 简洁 / 正常 / 详细。
+ */
+function depthLabel(n) {
+  if (n <= 50) return '简洁';
+  if (n <= 160) return '正常';
+  return '详细';
+}
+
+/** 支持的语言。文案全部人工撰写，不走机器翻译。 */
+const LANGS = Object.freeze([
+  { id: 'zh-CN', label: '简体中文' },
+  { id: 'zh-TW', label: '繁體中文' },
+  { id: 'en', label: 'English' },
+  { id: 'ja', label: '日本語' },
+  { id: 'ko', label: '한국어' },
+  { id: 'de', label: 'Deutsch' },
+  { id: 'fr', label: 'Français' },
+  { id: 'es', label: 'Español' },
+  { id: 'ru', label: 'Русский' },
+]);
+
+const KEY = 'knest.prefs';
+const DEFAULTS = Object.freeze({ skin: 'ink', size: 'md', charLimit: 90, lang: 'zh-CN' });
+
+/**
+ * 读偏好。坏数据一律退回默认，不让面板因为一个脏字段打不开。
+ * @returns {{skin:string, size:string, depth:string, lang:string}} 偏好。
+ */
+function readPrefs() {
+  try {
+    const raw = globalThis.localStorage?.getItem(KEY);
+    if (!raw) return { ...DEFAULTS };
+    const parsed = JSON.parse(raw);
+    return {
+      skin: THEMES.some((t) => t.id === parsed?.skin) ? parsed.skin : DEFAULTS.skin,
+      size: SIZES.some((s) => s.id === parsed?.size) ? parsed.size : DEFAULTS.size,
+      charLimit: Number.isFinite(parsed?.charLimit)
+        ? Math.max(CHAR_RANGE.min, Math.min(CHAR_RANGE.max, Math.round(parsed.charLimit)))
+        : DEFAULTS.charLimit,
+      lang: LANGS.some((l) => l.id === parsed?.lang) ? parsed.lang : DEFAULTS.lang,
+    };
+  } catch {
+    return { ...DEFAULTS };
+  }
+}
+
+/**
+ * 写偏好并存档。
+ * @param {Partial<{skin:string,size:string,depth:string,lang:string}>} patch - 要改的字段。
+ * @returns {object} 合并后的完整偏好。
+ */
+function writePrefs(patch) {
+  const next = { ...readPrefs(), ...patch };
+  try {
+    globalThis.localStorage?.setItem(KEY, JSON.stringify(next));
+  } catch {
+    /* 隐私模式下写不进去，功能照用，只是刷新会丢 */
+  }
+  applyPrefs(next);
+  /* 广播一次，让面板文案跟着换（不重建 DOM） */
+  try {
+    globalThis.dispatchEvent?.(new CustomEvent('knest-prefs', { detail: next }));
+  } catch { /* 老宿主没有 CustomEvent，忽略 */ }
+  return next;
+}
+
+/**
+ * 把偏好打到根元素上，样式靠这个切换。
+ * @param {object} [prefs] - 偏好，不传就现读。
+ * @returns {void}
+ */
+function applyPrefs(prefs) {
+  const p = prefs ?? readPrefs();
+  const root = globalThis.document?.documentElement;
+  if (!root) return;
+  root.setAttribute('data-knest-skin', p.skin);
+  root.setAttribute('data-knest-size', p.size);
+  root.setAttribute('data-knest-lang', p.lang);
+}
+
+/** 各档详细度对应的字数上限，提示词要用。 */
+const DEPTH_LIMIT = Object.freeze({ brief: 40, normal: 90, deep: 200 });
+
+/**
+ * 当前详细度的字数上限。
+ * @returns {number} 字数。
+ */
+function currentLimit() {
+  return readPrefs().charLimit;
+}
+
+/**
+ * 当前语言。
+ * @returns {string} zh-CN / en / ja。
+ */
+function currentLang() {
+  return readPrefs().lang;
+}
+
+
+/* ===== client/i18n.js ===== */
+/**
+ * 文案字典。
+ *
+ * 三条规矩：
+ *   1. **不机翻**。每条都是照着目标语言的习惯重写的，不是字对字替换。
+ *      比如「圈一个词」在英文里是 Pick a word，不是 Circle a word——
+ *      英文里 circle a word 听起来像用笔在纸上画圈。
+ *   2. key 用中文原文，取值时 `t('圈一个词')`。好处是漏翻的地方
+ *      会直接显示中文，一眼能看出哪里没覆盖，不会静默变成空白。
+ *   3. 只在独立注入版里用。DSH 版走宿主自己的语言，不需要这套。
+ */
+
+/** 英文。 */
+const EN = {
+  /* 菜单 */
+  '复制': 'Copy',
+  '查询': 'Look up',
+  '右键拖': 'Right-drag',
+  '换个说法': 'In plain words',
+  '标出同领域': 'Mark same field',
+  '批注这段': 'Annotate',
+  '一次性': 'Once',
+  '收进生词本': 'Save to wordbook',
+  '复制释义': 'Copy gloss',
+  '举个例子': 'Give an example',
+  '翻译': 'Translate',
+  '朗读': 'Read aloud',
+  '复制引用块': 'Copy quote block',
+  '定位出处': 'Jump to source',
+  '清空批注': 'Clear annotations',
+  '返回': 'Back',
+  '先查询一次': 'Look it up once first',
+  '先查询一次才有释义可复制': 'Look it up once, then there is a gloss to copy',
+  '先查询一次才有释义': 'Look it up first to get a gloss',
+  '先选中一段文字': 'Select some text first',
+  '更多': 'More',
+  '选区操作': 'Selection actions',
+  '已复制': 'Copied',
+  '已复制释义': 'Gloss copied',
+  '释义已复制': 'Gloss copied',
+  '复制失败': 'Copy failed',
+  '没有可复制的内容': 'Nothing to copy',
+  '已收进生词本': 'Saved to wordbook',
+
+  /* 卡片 */
+  '人一眼能读完': 'Short enough to scan',
+  '先定义再举例': 'Defines first, then shows',
+  '在这段对话里': 'In this conversation',
+  '读法明确': 'One clear reading',
+  '略有歧义': 'Slightly ambiguous',
+  '不太确定': 'Not sure',
+  '没找到 DeepSeek key。插件设置里能看到它在找哪三处。': 'No DeepSeek key found. Settings shows the three places it looks.',
+  '解释被关掉了（配置文件里 enabled: false）。': 'Explanations are turned off (enabled: false in the config).',
+  'key 被接口拒了，检查一下这把钥匙。': 'The API rejected the key. Worth checking it.',
+  '接口在限流，过一会儿再圈一次。': 'The API is rate-limiting. Try again in a moment.',
+  '模型这次没回话（超时）。': 'The model did not answer in time.',
+  '连不上本机插件路由——多半是改完插件还没重启 dsh。': 'Cannot reach the local plugin route — most likely dsh was not restarted after a change.',
+  '接口回来的不是 JSON。': 'The API did not return JSON.',
+  '配置里的模型名接口不认。': 'The API does not recognise the configured model name.',
+  '模型这次什么都没给。': 'The model returned nothing.',
+  '圈出来的文本有问题（空的或太长）。': 'The selected text is unusable (empty or too long).',
+  '请求太大了。': 'The request is too large.',
+  '这次花了多少': 'What it cost',
+  '为什么没解释': 'Why no explanation',
+  '这次没拿到解释': 'No explanation this time',
+  '上级概念': 'Parent concept',
+  '这次没拿到解释。': 'No explanation this time.',
+
+  /* 画布 / 知识树 */
+  '知识库': 'Vault',
+  '画布上还没有卡片': 'No cards on the canvas yet',
+  '图上还空着。圈第一个词试试。': 'Still empty. Try picking a word.',
+  '这里就会多出一个节点，点它随时再看。': 'A node will appear here. Click it any time.',
+  '最多 4 层，这里不再展开': 'Four levels deep — no further expansion',
+  '最小化': 'Minimise',
+  '关闭': 'Close',
+  '回到上级': 'Back to parent',
+  '没判定': 'Undecided',
+  '拖标题栏移动卡片 · Alt+拖拽平移 · Ctrl+滚轮缩放 · Esc 收起': 'Drag the bar to move · Alt+drag to pan · Ctrl+wheel to zoom · Esc to close',
+  '导出这棵树为 Markdown': 'Export this tree as Markdown',
+  '导出Markdown': 'Export Markdown',
+  '清空': 'Clear',
+  '清空这张图': 'Clear this canvas',
+  '删掉这条': 'Delete this',
+  '删除这张卡': 'Delete this card',
+  '已删除这张卡': 'Card deleted',
+  '已删除这张卡（连同它的子卡片）': 'Card deleted, along with its children',
+  '找不到这张卡': 'Card not found',
+  '这张卡还没有释义': 'This card has no gloss yet',
+  '这个宿主不支持文字高亮': 'This host does not support text highlighting',
+  '页面上找不到这个词': 'Cannot find this word on the page',
+  '已定位': 'Located',
+  '定位失败': 'Could not locate',
+  '再试一次': 'Try again',
+  '重新解释这个词': 'Explain this word again',
+  '重新解释': 'Explain again',
+  '拖动': 'Drag',
+
+  /* 空态与引导 */
+  '还没有消息': 'No messages yet',
+  '这个会话里还没有可圈的东西。': 'Nothing to pick yet in this conversation.',
+  '按住鼠标右键拖过聊天里的一个词或一句话，松手它就变绿，意思钉在这条轴上。':
+    'Right-drag across a word or a sentence. Let go and it turns green, with the meaning pinned to this axis.',
+  '知识库已关闭：右键仍可对选中的词「查询」一次；右侧竖牌或快捷键可以重新打开。':
+    'Vault is off. Right-clicking still gives a one-off lookup; the side tab or a shortcut turns it back on.',
+  '回到对话，按住鼠标右键拖过一个词；': 'Go back to the chat and right-drag across a word;',
+  '松手 → 它变绿，右边弹出解释；': 'let go — it turns green and the gloss pops out;',
+  '启用知识库': 'Turn vault on',
+  '开着：按住右键拖过字就变绿并解释。': 'On: right-drag across text and it turns green with a gloss.',
+  '关着：右键会弹出小菜单（剪切 / 复制 / 粘贴 / 查询）。': 'Off: right-click opens a small menu (cut / copy / paste / look up).',
+
+  /* 批注 */
+  '划掉': 'Strike out',
+  '改写': 'Rewrite',
+  '切换：改写 / 划掉': 'Switch: rewrite / strike out',
+  '删掉这条批注': 'Delete this note',
+  '改为：': 'Change to: ',
+  '已发生': 'Happened',
+  '批注': 'Note',
+  '批注模式': 'Annotate mode',
+  '批注模式：拖过一段字就标红 · Esc 退出': 'Annotate: drag across text to mark it · Esc to exit',
+  '批注模式：拖过一段字就标红': 'Annotate: drag across text to mark it',
+  '批注模式：拖过一段字就标红（再点退出）': 'Annotate: drag across text to mark it (click again to exit)',
+  '批注模式：左键拖选要改的文字': 'Annotate: left-drag to select text you want changed',
+  '已退出批注模式': 'Left annotate mode',
+  '清空所有批注': 'Clear all annotations',
+  '清空所有批注（红字与气泡一起去掉）': 'Clear all annotations (marks and bubbles alike)',
+  '批注已清空': 'Annotations cleared',
+  '已把全部批注标记为已提交': 'All annotations marked as submitted',
+  '已标红': 'Marked',
+  '已标红，在上方气泡里写改为': 'Marked. Write the replacement in the bubble above',
+  '这段没能标上批注': 'Could not annotate this passage',
+  '拖过一段要改的文字': 'Drag across the text you want changed',
+  '先选中一段要改的文字': 'Select the text you want changed first',
+
+  /* 模型与状态 */
+  '上下文': 'Context',
+  '模型': 'Model',
+  'deepseek-flash 更快更省': 'deepseek-flash: faster, cheaper',
+  'deepseek-v4-pro 更细更慢': 'deepseek-v4-pro: finer, slower',
+  '重新读状态': 'Re-read status',
+  '清解释缓存': 'Clear gloss cache',
+  '只把「圈出的字 + 前后一两条对话」发给 DeepSeek；同一个词在同一段对话里只问一次，之后走缓存。':
+    'Only the picked text plus one or two surrounding messages go to DeepSeek. A word is asked once per conversation; after that it comes from cache.',
+  '工作区内的相对路径': 'Relative path inside the workspace',
+  '工作区内的相对路径，如 README.md': 'Relative path inside the workspace, e.g. README.md',
+  '读取中…': 'Reading…',
+  '读取': 'Read',
+  '只读通道：文本后缀、1MB 以内、必须在当前工作区内；读到的全文打到控制台。': 'Read-only channel: text extensions, under 1 MB, must be inside the current workspace. The full text goes to the console.',
+  '还没有真实请求；圈一次词就能看到用量。': 'No real requests yet — pick one word to see usage.',
+  '路由没响应': 'Route did not respond',
+  '先填一个路径': 'Fill in a path first',
+  '正在问 host…': 'Asking the host…',
+  '没有钥匙：host 会依次找 配置文件 → 环境变量 → ~/.dsh/.credentials.yaml': 'No key. The host looks in: config file → environment → ~/.dsh/.credentials.yaml',
+  '已开启': 'On',
+  '已关闭': 'Off',
+  '现在': 'now',
+  '你': 'You',
+  '答': 'A',
+  '回答': 'Answer',
+  '依据': 'Basis: ',
+
+  /* 设置 */
+  '关闭2': 'Close',
+  '下面的模型配置和上面这些互不影响': 'Model settings below are independent of everything above',
+  '（未配置）': '(not configured)',
+  '（无）': '(none)',
+  '不用填': 'Not needed',
+  '读不到配置服务': 'Cannot reach the config service',
+  '保存失败': 'Save failed',
+  '保存成功，测试通过：': 'Saved, test passed: ',
+  '已保存，但测试没过：': 'Saved, but the test failed: ',
+  '词林：配置已生效': 'Word Grove: settings applied',
+  '外观': 'Look',
+  '卡片大小': 'Card size',
+  '解释长度': 'Detail',
+  '语言': 'Language',
+  '词林 · 外观、长度、语言都在这里': 'Word Grove · look, length, language',
+
+  /* 主题与尺寸 */
+  '墨': 'Ink',
+  '黑金，最克制': 'Black and gold, most restrained',
+  '星云': 'Nebula',
+  '彩虹渐变发光': 'Rainbow gradient glow',
+  '霓虹': 'Neon',
+  '赛博紫青': 'Cyber violet and cyan',
+  '玉': 'Jade',
+  '青玉温润': 'Warm celadon',
+  '纸': 'Paper',
+  '奶油浅色': 'Cream, light',
+  '终端': 'Terminal',
+  '等宽绿化': 'Monospace green',
+  '小': 'Small',
+  '280 宽 · 13 号字': '280 wide · 13 px',
+  '中': 'Medium',
+  '360 宽 · 14 号字': '360 wide · 14 px',
+  '大': 'Large',
+  '460 宽 · 16 号字': '460 wide · 16 px',
+  '简洁': 'Brief',
+  '一句话说完，40 字内': 'One sentence, under 40 characters',
+  '正常': 'Normal',
+  '两层意思，90 字内': 'Two points, under 90 characters',
+  '详细': 'Detailed',
+  '展开讲透，200 字内': 'Spelled out, under 200 characters',
+  '精简': 'Lean',
+  '标准': 'Standard',
+
+  /* 导出 */
+  '词林 · 知识树': 'Word Grove · Knowledge Tree',
+  '导出时间': 'Exported',
+  '导出失败：浏览器拦了下载和剪贴板': 'Export failed: the browser blocked both download and clipboard',
+  '独立版还没做这个动作': 'Not available in the standalone build yet',
+  '当前窗口': 'this window',
+  '清空所有': 'Clear all',
+  '全部': 'All',
+  '彻底删除这张卡': 'Delete this card for good',
+
+  /* 其它 */
+  '先查询一次，才有释义可复制': 'Look it up once, then the gloss can be copied',
+  '画布上已经有「': 'The canvas already has "',
+  '」了': '"',
+  '这个词被解释过': 'This word has been explained',
+  '这个词还没有领域信息': 'This word has no field info yet',
+  '还没有别的「': 'No other "',
+  '」词可标': '" words to mark',
+  '标出': 'Mark',
+  '个': '',
+  '」词': '" words',
+  '正在选字': 'Selecting',
+  '解释这段文本': 'Explain this text',
+  '解释这段代码': 'Explain this code',
+  '正在补判定领域': 'Working out the field',
+  '正在补判定领域，解释回来后再点一次「标出同领域」': 'Working out the field — mark the same field once the gloss arrives',
+  '朗读中': 'Reading aloud',
+  '这里不能朗读': 'Cannot read this aloud here',
+  '引用已复制': 'Quote copied',
+  '已复制引用块': 'Quote block copied',
+  '这次花了多少2': 'Cost',
+  '把文本 + 代码一起发过去': 'Send text and code together',
+  '刚圈住': 'Just picked',
+  '全文档可见': 'Visible across the document',
+  '宿主自己声明的主题': 'Theme declared by the host',
+  '第几条消息': 'Which message',
+  '这个词是在哪一句里冒出来的': 'Which sentence this word came from',
+  '选区落在同一个文本节点': 'Selection stays inside one text node',
+  '拖过': 'Dragged',
+  '现在2': 'now',
+  '没有上下文': 'No context',
+  '文档里的词': 'A word from the document',
+  '一个词/一句话': 'a word or a sentence',
+  '右键拖过的两点': 'the two points you right-dragged between',
+  '搜词 / 释义 / 原文 / 领域…': 'word / gloss / source / field…',
+  '(无词)': '(none)',
+  '知识库生词本': 'Vault · Wordbook',
+  '知识库 · 生词本': 'Vault · Wordbook',
+  '拿到结果 → 塞剪贴板 / 存 localStorage / 开窗口': 'Got a result → clipboard / localStorage / new window',
+  '词林 · 设置': 'Word Grove · Settings',
+  '接口地址': 'Endpoint',
+  '模型名': 'Model',
+  '钥匙': 'Key',
+  '保存并测试': 'Save and test',
+  '只测试': 'Test only',
+  '正在读取…': 'Loading…',
+  '正在保存…': 'Saving…',
+  '当前生效': 'Active',
+  '配置目录': 'Config folder',
+};
+
+/** 日文。 */
+const JA = {
+  '复制': 'コピー',
+  '查询': '調べる',
+  '右键拖': '右ドラッグ',
+  '换个说法': 'やさしい言葉で',
+  '标出同领域': '同じ分野を強調',
+  '批注这段': '注釈する',
+  '一次性': '一度だけ',
+  '收进生词本': '単語帳へ',
+  '复制释义': '意味をコピー',
+  '举个例子': '例を挙げる',
+  '翻译': '翻訳',
+  '朗读': '読み上げ',
+  '复制引用块': '引用をコピー',
+  '定位出处': '出典へ移動',
+  '清空批注': '注釈を消す',
+  '返回': '戻る',
+  '先查询一次': 'まず一度調べてください',
+  '先查询一次才有释义可复制': '一度調べると意味をコピーできます',
+  '先查询一次才有释义': 'まず調べると意味が出ます',
+  '先选中一段文字': '先に文字を選んでください',
+  '更多': 'その他',
+  '选区操作': '選択範囲の操作',
+  '已复制': 'コピーしました',
+  '已复制释义': '意味をコピーしました',
+  '释义已复制': '意味をコピーしました',
+  '复制失败': 'コピーできませんでした',
+  '没有可复制的内容': 'コピーする内容がありません',
+  '已收进生词本': '単語帳に入れました',
+
+  '人一眼能读完': '一目で読み切れる長さ',
+  '先定义再举例': '定義してから例を出す',
+  '在这段对话里': 'この会話の中では',
+  '读法明确': '読み方が一つに定まる',
+  '略有歧义': 'やや曖昧',
+  '不太确定': 'はっきりしない',
+  '没找到 DeepSeek key。插件设置里能看到它在找哪三处。': 'DeepSeek のキーが見つかりません。設定画面に探している三か所が出ます。',
+  '解释被关掉了（配置文件里 enabled: false）。': '説明機能が切られています（設定ファイルの enabled: false）。',
+  'key 被接口拒了，检查一下这把钥匙。': 'キーが API に拒否されました。キーを確認してください。',
+  '接口在限流，过一会儿再圈一次。': 'API がレート制限中です。少し待ってからもう一度。',
+  '模型这次没回话（超时）。': 'モデルが時間内に応答しませんでした。',
+  '连不上本机插件路由——多半是改完插件还没重启 dsh。': 'ローカルのプラグイン経路につながりません。プラグイン変更後に dsh を再起動していない可能性が高いです。',
+  '接口回来的不是 JSON。': 'API の返答が JSON ではありません。',
+  '配置里的模型名接口不认。': '設定したモデル名を API が認識しません。',
+  '模型这次什么都没给。': 'モデルが何も返しませんでした。',
+  '圈出来的文本有问题（空的或太长）。': '選んだテキストに問題があります（空、または長すぎる）。',
+  '请求太大了。': 'リクエストが大きすぎます。',
+  '这次花了多少': '今回のコスト',
+  '为什么没解释': '説明が出ない理由',
+  '这次没拿到解释': '今回は説明を取得できませんでした',
+  '上级概念': '上位の概念',
+  '这次没拿到解释。': '今回は説明を取得できませんでした。',
+
+  '知识库': '知識庫',
+  '画布上还没有卡片': 'キャンバスにまだカードがありません',
+  '图上还空着。圈第一个词试试。': 'まだ空です。最初の一語を選んでみてください。',
+  '这里就会多出一个节点，点它随时再看。': 'ここにノードが増えます。いつでも押して見返せます。',
+  '最多 4 层，这里不再展开': '四階層まで。ここから先は展開しません',
+  '最小化': '最小化',
+  '关闭': '閉じる',
+  '回到上级': '親へ戻る',
+  '没判定': '未判定',
+  '拖标题栏移动卡片 · Alt+拖拽平移 · Ctrl+滚轮缩放 · Esc 收起': 'バーをドラッグで移動 · Alt+ドラッグで平行移動 · Ctrl+ホイールで拡大 · Esc で閉じる',
+  '导出这棵树为 Markdown': 'この木を Markdown で書き出す',
+  '导出Markdown': 'Markdown を書き出す',
+  '清空': '空にする',
+  '清空这张图': 'この図を空にする',
+  '删掉这条': 'これを削除',
+  '删掉这条': 'これを削除',
+  '删除这张卡': 'このカードを削除',
+  '已删除这张卡': 'カードを削除しました',
+  '已删除这张卡（连同它的子卡片）': 'カードを子カードごと削除しました',
+  '找不到这张卡': 'このカードが見つかりません',
+  '这张卡还没有释义': 'このカードにはまだ意味がありません',
+  '这个宿主不支持文字高亮': 'このホストは文字の強調表示に対応していません',
+  '页面上找不到这个词': 'ページ上にこの語が見つかりません',
+  '已定位': '位置を特定しました',
+  '定位失败': '位置を特定できませんでした',
+  '再试一次': 'もう一度',
+  '重新解释这个词': 'この語を説明し直す',
+  '重新解释': '説明し直す',
+  '拖动': 'ドラッグ',
+
+  '还没有消息': 'まだメッセージがありません',
+  '这个会话里还没有可圈的东西。': 'この会話にはまだ選べるものがありません。',
+  '按住鼠标右键拖过聊天里的一个词或一句话，松手它就变绿，意思钉在这条轴上。':
+    'チャット上の語や文を右ドラッグして、離すと緑になり、意味がこの軸に留まります。',
+  '知识库已关闭：右键仍可对选中的词「查询」一次；右侧竖牌或快捷键可以重新打开。':
+    '知識庫は切っています。右クリックなら一度だけ調べられます。右端のタブかショートカットで戻せます。',
+  '回到对话，按住鼠标右键拖过一个词；': '会話に戻り、語を右ドラッグします。',
+  '松手 → 它变绿，右边弹出解释；': '離すと緑になり、右に説明が出ます。',
+  '启用知识库': '知識庫を有効にする',
+  '开着：按住右键拖过字就変绿并解释。': 'オン：右ドラッグで緑になり説明が出ます。',
+  '开着：按住右键拖过字就变绿并解释。': 'オン：右ドラッグで緑になり説明が出ます。',
+  '关着：右键会弹出小菜单（剪切 / 复制 / 粘贴 / 查询）。': 'オフ：右クリックで小さなメニューが出ます（切り取り / コピー / 貼り付け / 調べる）。',
+
+  '划掉': '取り消し線',
+  '改写': '書き換え',
+  '切换：改写 / 划掉': '切り替え：書き換え / 取り消し線',
+  '删掉这条批注': 'この注釈を削除',
+  '改为：': 'こう変える：',
+  '已发生': '既に発生',
+  '批注': '注釈',
+  '批注模式': '注釈モード',
+  '批注模式：拖过一段字就标红 · Esc 退出': '注釈：なぞると赤く印が付きます · Esc で終了',
+  '批注模式：拖过一段字就标红': '注釈：なぞると赤く印が付きます',
+  '批注模式：拖过一段字就标红（再点退出）': '注釈：なぞると赤く印が付きます（もう一度押すと終了）',
+  '批注模式：左键拖选要改的文字': '注釈：変えたい文字を左ドラッグで選びます',
+  '已退出批注模式': '注釈モードを終了しました',
+  '清空所有批注': 'すべての注釈を消す',
+  '清空所有批注（红字与气泡一起去掉）': 'すべての注釈を消す（赤字と吹き出しごと）',
+  '批注已清空': '注釈を消しました',
+  '已把全部批注标记为已提交': 'すべての注釈を提出済みにしました',
+  '已标红': '印を付けました',
+  '已标红，在上方气泡里写改为': '印を付けました。上の吹き出しに変更後の文を書いてください',
+  '这段没能标上批注': 'この部分に注釈を付けられませんでした',
+  '拖过一段要改的文字': '変えたい文字をなぞってください',
+  '先选中一段要改的文字': '先に変えたい文字を選んでください',
+
+  '上下文': '文脈',
+  '模型': 'モデル',
+  'deepseek-flash 更快更省': 'deepseek-flash：速くて安い',
+  'deepseek-v4-pro 更细更慢': 'deepseek-v4-pro：細かいが遅い',
+  '重新读状态': '状態を読み直す',
+  '清解释缓存': '説明のキャッシュを消す',
+  '只把「圈出的字 + 前后一两条对话」发给 DeepSeek；同一个词在同一段对话里只问一次，之后走缓存。':
+    '選んだ語と前後一、二件のやり取りだけを DeepSeek に送ります。同じ語は同じ会話で一度だけ問い合わせ、以降はキャッシュから返します。',
+  '工作区内的相对路径，如 README.md': 'ワークスペース内の相対パス（例：README.md）',
+  '读取中…': '読み込み中…',
+  '读取': '読み込む',
+  '只读通道：文本后缀、1MB 以内、必须在当前工作区内；读到的全文打到控制台。':
+    '読み取り専用：テキスト拡張子、1MB 以内、現在のワークスペース内であること。読んだ全文はコンソールに出ます。',
+  '还没有真实请求；圈一次词就能看到用量。': 'まだ実際のリクエストはありません。一語選ぶと使用量が出ます。',
+  '路由没响应': '経路が応答しません',
+  '先填一个路径': '先にパスを入れてください',
+  '正在问 host…': 'ホストに問い合わせ中…',
+  '没有钥匙：host 会依次找 配置文件 → 环境变量 → ~/.dsh/.credentials.yaml':
+    'キーがありません。ホストは 設定ファイル → 環境変数 → ~/.dsh/.credentials.yaml の順に探します。',
+  '已开启': 'オン',
+  '已关闭': 'オフ',
+  '现在': 'たった今',
+  '你': 'あなた',
+  '答': '答',
+  '回答': '回答',
+  '依据': '根拠：',
+
+  '下面的模型配置和上面这些互不影响': '下のモデル設定は上の項目と関係ありません',
+  '（未配置）': '（未設定）',
+  '（无）': '（なし）',
+  '不用填': '入力不要',
+  '读不到配置服务': '設定サービスに届きません',
+  '保存失败': '保存できませんでした',
+  '保存成功，测试通过：': '保存しました。テスト成功：',
+  '已保存，但测试没过：': '保存しましたが、テストは通りませんでした：',
+  '词林：配置已生效': '詞林：設定を反映しました',
+  '外观': '見た目',
+  '卡片大小': 'カードの大きさ',
+  '解释长度': '説明の長さ',
+  '语言': '言語',
+  '词林 · 外观、长度、语言都在这里': '詞林 · 見た目・長さ・言語',
+
+  '墨': '墨',
+  '黑金，最克制': '黒と金、いちばん控えめ',
+  '星云': '星雲',
+  '彩虹渐变发光': '虹色のグラデーション発光',
+  '霓虹': 'ネオン',
+  '赛博紫青': 'サイバー紫と青',
+  '玉': '玉',
+  '青玉温润': '青玉のように柔らかい',
+  '纸': '紙',
+  '奶油浅色': 'クリーム色の明るい配色',
+  '终端': '端末',
+  '等宽绿化': '等幅の緑',
+  '小': '小',
+  '280 宽 · 13 号字': '幅 280 · 13 px',
+  '中': '中',
+  '360 宽 · 14 号字': '幅 360 · 14 px',
+  '大': '大',
+  '460 宽 · 16 号字': '幅 460 · 16 px',
+  '简洁': '簡潔',
+  '一句话说完，40 字内': '一文で言い切る、40 字以内',
+  '正常': '標準',
+  '两层意思，90 字内': '二点まで、90 字以内',
+  '详细': '詳細',
+  '展开讲透，200 字内': 'とことん説明、200 字以内',
+  '精简': '簡略',
+  '标准': '標準',
+
+  '词林 · 知识树': '詞林 · 知識の木',
+  '导出时间': '書き出し日時',
+  '导出失败：浏览器拦了下载和剪贴板': '書き出しに失敗：ブラウザがダウンロードとクリップボードを止めました',
+  '独立版还没做这个动作': '単体版ではまだこの動作に対応していません',
+  '当前窗口': 'このウィンドウ',
+
+  '画布上已经有「': 'キャンバスには既に「',
+  '」了': '」があります',
+  '这个词被解释过': 'この語は説明済みです',
+  '这个词还没有领域信息': 'この語にはまだ分野の情報がありません',
+  '还没有别的「': 'ほかに「',
+  '」词可标': '」の語はありません',
+  '正在选字': '選択中',
+  '解释这段文本': 'このテキストを説明',
+  '解释这段代码': 'このコードを説明',
+  '正在补判定领域': '分野を判定中',
+  '正在补判定领域，解释回来后再点一次「标出同领域」': '分野を判定中です。説明が返ってから「同じ分野を強調」を押してください',
+  '朗读中': '読み上げ中',
+  '这里不能朗读': 'ここでは読み上げできません',
+  '引用已复制': '引用をコピーしました',
+  '这次花了多少2': 'コスト',
+  '刚圈住': '選んだばかり',
+  '全文档可见': '文書全体で有効',
+  '宿主自己声明的主题': 'ホストが宣言したテーマ',
+  '第几条消息': '何件目のメッセージか',
+  '这个词是在哪一句里冒出来的': 'この語がどの文から出てきたか',
+  '选区落在同一个文本节点': '選択範囲が一つのテキストノードに収まっている',
+  '拖过': 'なぞった',
+  '没有上下文': '文脈なし',
+  '文档里的词': '文書中の語',
+  '一个词/一句话': '一語、または一文',
+  '右键拖过的两点': '右ドラッグした二点',
+  '搜词 / 释义 / 原文 / 领域…': '語 / 意味 / 原文 / 分野…',
+  '(无词)': '（語なし）',
+  '知识库 · 生词本': '知識庫 · 単語帳',
+  '拿到结果 → 塞剪贴板 / 存 localStorage / 开窗口': '結果を得る → クリップボード / localStorage / 新しい窓',
+  '词林 · 设置': '詞林 · 設定',
+  '接口地址': 'エンドポイント',
+  '模型名': 'モデル',
+  '钥匙': 'キー',
+  '保存并测试': '保存してテスト',
+  '只测试': 'テストのみ',
+  '正在读取…': '読み込み中…',
+  '正在保存…': '保存中…',
+  '当前生效': '現在の設定',
+  '配置目录': '設定フォルダ',
+  '（未設定）': '（未設定）',
+  '先查询一次，才有释义可复制': '一度調べると意味をコピーできます',
+};
+
+/** 繁體中文：用語按台灣習慣，不是把簡體直接轉過去。 */
+const ZH_TW = {
+  '复制': '複製',
+  '查询': '查詢',
+  '右键拖': '右鍵拖曳',
+  '换个说法': '換句話說',
+  '标出同领域': '標出同領域',
+  '批注这段': '註記這段',
+  '一次性': '一次性',
+  '收进生词本': '收進生詞本',
+  '复制释义': '複製釋義',
+  '举个例子': '舉個例子',
+  '翻译': '翻譯',
+  '朗读': '朗讀',
+  '复制引用块': '複製引用區塊',
+  '定位出处': '定位出處',
+  '清空批注': '清空註記',
+  '返回': '返回',
+  '更多': '更多',
+  '先查询一次': '先查詢一次',
+  '先选中一段文字': '先選取一段文字',
+  '已复制': '已複製',
+  '已复制释义': '已複製釋義',
+  '复制失败': '複製失敗',
+  '已收进生词本': '已收進生詞本',
+  '知识库': '知識庫',
+  '画布上还没有卡片': '畫布上還沒有卡片',
+  '图上还空着。圈第一个词试试。': '圖上還空著。圈第一個詞試試。',
+  '最多 4 层，这里不再展开': '最多 4 層，這裡不再展開',
+  '最小化': '最小化',
+  '关闭': '關閉',
+  '回到上级': '回到上層',
+  '没判定': '未判定',
+  '清空': '清空',
+  '清空这张图': '清空這張圖',
+  '删掉这条': '刪掉這條',
+  '再试一次': '再試一次',
+  '重新解释这个词': '重新解釋這個詞',
+  '还没有消息': '還沒有訊息',
+  '上下文': '上下文',
+  '模型': '模型',
+  '已开启': '已開啟',
+  '已关闭': '已關閉',
+  '现在': '現在',
+  '你': '你',
+  '答': '答',
+  '外观': '外觀',
+  '卡片大小': '卡片大小',
+  '解释长度': '解釋長度',
+  '语言': '語言',
+  '往左更短，往右更详细': '往左更短，往右更詳細',
+  '简洁': '簡潔',
+  '正常': '正常',
+  '詳細': '詳細',
+  '详细': '詳細',
+  '深灰': '深灰',
+  '彩虹': '彩虹',
+  '青': '青',
+  '浅玉': '淺玉',
+  '纸白': '紙白',
+  '琥珀': '琥珀',
+  '小': '小',
+  '中': '中',
+  '大': '大',
+  '黑金，最克制': '黑金，最克制',
+  '直角，无阴影': '直角，無陰影',
+  '渐变描边，唯一带发光的一套': '漸層描邊，唯一帶發光的一套',
+  '切角，单色': '切角，單色',
+  '浅底深字，大圆角': '淺底深字，大圓角',
+  '纸色，靠字距': '紙色，靠字距',
+  '等宽，琥珀屏': '等寬，琥珀螢幕',
+  '宽 280，13 号字': '寬 280，13 號字',
+  '宽 360，14 号字': '寬 360，14 號字',
+  '宽 460，16 号字': '寬 460，16 號字',
+  '词林 · 外观、长度、语言都在这里': '詞林 · 外觀、長度、語言都在這裡',
+  '下面的模型配置和上面这些互不影响': '下面的模型設定和上面這些互不影響',
+  '保存失败': '儲存失敗',
+  '不用填': '不用填',
+  '批注': '註記',
+  '批注模式': '註記模式',
+  '批注已清空': '註記已清空',
+  '划掉': '劃掉',
+  '改写': '改寫',
+  '已发生': '已發生',
+  '解释这段文本': '解釋這段文字',
+  '解释这段代码': '解釋這段程式碼',
+  '词林 · 设置': '詞林 · 設定',
+  '接口地址': '介面位址',
+  '模型名': '模型名稱',
+  '钥匙': '金鑰',
+  '保存并测试': '儲存並測試',
+  '只测试': '只測試',
+  '正在读取…': '正在讀取…',
+  '正在保存…': '正在儲存…',
+  '当前生效': '目前生效',
+  '配置目录': '設定目錄',
+  '选区操作': '選取範圍操作',
+  '先查询一次，才有释义可复制': '先查詢一次，才有釋義可複製',
+};
+
+/** 한국어. */
+const KO = {
+  '复制': '복사',
+  '查询': '조회',
+  '右键拖': '우클릭 드래그',
+  '换个说法': '쉬운 말로',
+  '标出同领域': '같은 분야 표시',
+  '批注这段': '주석 달기',
+  '一次性': '한 번만',
+  '收进生词本': '단어장에 저장',
+  '复制释义': '뜻 복사',
+  '举个例子': '예시 보기',
+  '翻译': '번역',
+  '朗读': '읽어주기',
+  '复制引用块': '인용 복사',
+  '定位出处': '출처로 이동',
+  '清空批注': '주석 지우기',
+  '返回': '뒤로',
+  '更多': '더보기',
+  '先查询一次': '먼저 한 번 조회하세요',
+  '先选中一段文字': '먼저 글자를 선택하세요',
+  '已复制': '복사했습니다',
+  '已复制释义': '뜻을 복사했습니다',
+  '复制失败': '복사 실패',
+  '已收进生词本': '단어장에 저장했습니다',
+  '知识库': '지식 보관소',
+  '画布上还没有卡片': '캔버스에 아직 카드가 없습니다',
+  '图上还空着。圈第一个词试试。': '아직 비어 있습니다. 첫 단어를 골라 보세요.',
+  '最多 4 层，这里不再展开': '최대 4단계입니다. 더 펼치지 않습니다',
+  '最小化': '최소화',
+  '关闭': '닫기',
+  '回到上级': '상위로',
+  '没判定': '미판정',
+  '清空': '비우기',
+  '清空这张图': '이 그림 비우기',
+  '删掉这条': '이 항목 삭제',
+  '再试一次': '다시 시도',
+  '重新解释这个词': '이 단어 다시 설명',
+  '还没有消息': '아직 메시지가 없습니다',
+  '上下文': '문맥',
+  '模型': '모델',
+  '已开启': '켜짐',
+  '已关闭': '꺼짐',
+  '现在': '방금',
+  '你': '나',
+  '答': '답',
+  '外观': '겉모습',
+  '卡片大小': '카드 크기',
+  '解释长度': '설명 길이',
+  '语言': '언어',
+  '往左更短，往右更详细': '왼쪽은 짧게, 오른쪽은 자세하게',
+  '简洁': '간단히',
+  '正常': '보통',
+  '详细': '자세히',
+  '深灰': '짙은 회색',
+  '彩虹': '무지개',
+  '青': '청록',
+  '浅玉': '옅은 옥',
+  '纸白': '종이색',
+  '琥珀': '호박색',
+  '小': '작게',
+  '中': '보통',
+  '大': '크게',
+  '直角，无阴影': '직각, 그림자 없음',
+  '渐变描边，唯一带发光的一套': '그라데이션 테두리, 유일하게 빛나는 스타일',
+  '切角，单色': '모서리 컷, 단색',
+  '浅底深字，大圆角': '밝은 바탕에 진한 글자, 큰 둥근 모서리',
+  '纸色，靠字距': '종이색, 자간으로 조절',
+  '等宽，琥珀屏': '고정폭, 호박색 화면',
+  '宽 280，13 号字': '너비 280, 13포인트',
+  '宽 360，14 号字': '너비 360, 14포인트',
+  '宽 460，16 号字': '너비 460, 16포인트',
+  '词林 · 外观、长度、语言都在这里': '詞林 · 겉모습, 길이, 언어',
+  '下面的模型配置和上面这些互不影响': '아래 모델 설정은 위 항목과 무관합니다',
+  '保存失败': '저장 실패',
+  '不用填': '입력 불필요',
+  '批注': '주석',
+  '批注模式': '주석 모드',
+  '批注已清空': '주석을 지웠습니다',
+  '划掉': '취소선',
+  '改写': '고쳐 쓰기',
+  '已发生': '이미 발생',
+  '解释这段文本': '이 텍스트 설명',
+  '解释这段代码': '이 코드 설명',
+  '词林 · 设置': '詞林 · 설정',
+  '接口地址': '엔드포인트',
+  '模型名': '모델',
+  '钥匙': '키',
+  '保存并测试': '저장 후 테스트',
+  '只测试': '테스트만',
+  '正在读取…': '읽는 중…',
+  '正在保存…': '저장 중…',
+  '当前生效': '현재 설정',
+  '配置目录': '설정 폴더',
+  '选区操作': '선택 영역 작업',
+  '先查询一次，才有释义可复制': '먼저 조회하면 뜻을 복사할 수 있습니다',
+};
+
+/** Deutsch. */
+const DE = {
+  '复制': 'Kopieren',
+  '查询': 'Nachschlagen',
+  '右键拖': 'Rechts ziehen',
+  '换个说法': 'Einfach gesagt',
+  '标出同领域': 'Gleiches Feld markieren',
+  '批注这段': 'Anmerken',
+  '一次性': 'Einmalig',
+  '收进生词本': 'Ins Wortverzeichnis',
+  '复制释义': 'Deutung kopieren',
+  '举个例子': 'Beispiel geben',
+  '翻译': 'Übersetzen',
+  '朗读': 'Vorlesen',
+  '复制引用块': 'Zitat kopieren',
+  '定位出处': 'Zur Quelle',
+  '清空批注': 'Anmerkungen löschen',
+  '返回': 'Zurück',
+  '更多': 'Mehr',
+  '先查询一次': 'Erst einmal nachschlagen',
+  '先选中一段文字': 'Zuerst Text auswählen',
+  '已复制': 'Kopiert',
+  '已复制释义': 'Deutung kopiert',
+  '复制失败': 'Kopieren fehlgeschlagen',
+  '已收进生词本': 'Ins Wortverzeichnis gelegt',
+  '知识库': 'Wissensbasis',
+  '画布上还没有卡片': 'Noch keine Karten auf der Fläche',
+  '图上还空着。圈第一个词试试。': 'Noch leer. Wähle ein erstes Wort.',
+  '最多 4 层，这里不再展开': 'Höchstens vier Ebenen, hier endet es',
+  '最小化': 'Minimieren',
+  '关闭': 'Schliessen',
+  '回到上级': 'Zur übergeordneten',
+  '没判定': 'Unbestimmt',
+  '清空': 'Leeren',
+  '清空这张图': 'Diese Fläche leeren',
+  '删掉这条': 'Dies löschen',
+  '再试一次': 'Nochmal',
+  '重新解释这个词': 'Dieses Wort neu erklären',
+  '还没有消息': 'Noch keine Nachrichten',
+  '上下文': 'Kontext',
+  '模型': 'Modell',
+  '已开启': 'An',
+  '已关闭': 'Aus',
+  '现在': 'jetzt',
+  '你': 'Du',
+  '答': 'A',
+  '外观': 'Aussehen',
+  '卡片大小': 'Kartengrösse',
+  '解释长度': 'Länge',
+  '语言': 'Sprache',
+  '往左更短，往右更详细': 'Links kürzer, rechts ausführlicher',
+  '简洁': 'Knapp',
+  '正常': 'Normal',
+  '详细': 'Ausführlich',
+  '深灰': 'Dunkelgrau',
+  '彩虹': 'Regenbogen',
+  '青': 'Türkis',
+  '浅玉': 'Blassjade',
+  '纸白': 'Papierweiss',
+  '琥珀': 'Bernstein',
+  '小': 'Klein',
+  '中': 'Mittel',
+  '大': 'Gross',
+  '直角，无阴影': 'Rechte Winkel, kein Schatten',
+  '渐变描边，唯一带发光的一套': 'Verlaufsrand, der einzige mit Leuchten',
+  '切角，单色': 'Abgeschnittene Ecke, einfarbig',
+  '浅底深字，大圆角': 'Heller Grund, dunkle Schrift, stark gerundet',
+  '纸色，靠字距': 'Papierfarben, über Sperrung',
+  '等宽，琥珀屏': 'Dicktengleich, Bernsteinschirm',
+  '宽 280，13 号字': 'Breite 280, 13 Punkt',
+  '宽 360，14 号字': 'Breite 360, 14 Punkt',
+  '宽 460，16 号字': 'Breite 460, 16 Punkt',
+  '词林 · 外观、长度、语言都在这里': 'Wortgrove · Aussehen, Länge, Sprache',
+  '下面的模型配置和上面这些互不影响': 'Die Modellwahl unten ist davon unabhängig',
+  '保存失败': 'Speichern fehlgeschlagen',
+  '不用填': 'Nicht nötig',
+  '批注': 'Anmerkung',
+  '批注模式': 'Anmerkungsmodus',
+  '批注已清空': 'Anmerkungen gelöscht',
+  '划掉': 'Durchstreichen',
+  '改写': 'Umschreiben',
+  '已发生': 'Bereits geschehen',
+  '解释这段文本': 'Diesen Text erklären',
+  '解释这段代码': 'Diesen Code erklären',
+  '词林 · 设置': 'Wortgrove · Einstellungen',
+  '接口地址': 'Endpunkt',
+  '模型名': 'Modell',
+  '钥匙': 'Schlüssel',
+  '保存并测试': 'Speichern und testen',
+  '只测试': 'Nur testen',
+  '正在读取…': 'Wird gelesen…',
+  '正在保存…': 'Wird gespeichert…',
+  '当前生效': 'Aktiv',
+  '配置目录': 'Konfigurationsordner',
+  '选区操作': 'Auswahlaktionen',
+  '先查询一次，才有释义可复制': 'Erst nachschlagen, dann lässt sich die Deutung kopieren',
+};
+
+/** Français. */
+const FR = {
+  '复制': 'Copier',
+  '查询': 'Consulter',
+  '右键拖': 'Glisser-droit',
+  '换个说法': 'En clair',
+  '标出同领域': 'Même domaine',
+  '批注这段': 'Annoter',
+  '一次性': 'Une fois',
+  '收进生词本': 'Au carnet',
+  '复制释义': 'Copier le sens',
+  '举个例子': 'Un exemple',
+  '翻译': 'Traduire',
+  '朗读': 'Lire à voix haute',
+  '复制引用块': 'Copier la citation',
+  '定位出处': 'Aller à la source',
+  '清空批注': 'Effacer les annotations',
+  '返回': 'Retour',
+  '更多': 'Plus',
+  '先查询一次': 'Consultez d\'abord',
+  '先选中一段文字': 'Sélectionnez d\'abord du texte',
+  '已复制': 'Copié',
+  '已复制释义': 'Sens copié',
+  '复制失败': 'Copie impossible',
+  '已收进生词本': 'Ajouté au carnet',
+  '知识库': 'Base de connaissances',
+  '画布上还没有卡片': 'Pas encore de cartes',
+  '图上还空着。圈第一个词试试。': 'Encore vide. Choisissez un premier mot.',
+  '最多 4 层，这里不再展开': 'Quatre niveaux au plus, on s\'arrête ici',
+  '最小化': 'Réduire',
+  '关闭': 'Fermer',
+  '回到上级': 'Vers le parent',
+  '没判定': 'Indéterminé',
+  '清空': 'Vider',
+  '清空这张图': 'Vider cette toile',
+  '删掉这条': 'Supprimer ceci',
+  '再试一次': 'Réessayer',
+  '重新解释这个词': 'Réexpliquer ce mot',
+  '还没有消息': 'Pas encore de messages',
+  '上下文': 'Contexte',
+  '模型': 'Modèle',
+  '已开启': 'Activé',
+  '已关闭': 'Désactivé',
+  '现在': 'à l\'instant',
+  '你': 'Vous',
+  '答': 'R',
+  '外观': 'Apparence',
+  '卡片大小': 'Taille des cartes',
+  '解释长度': 'Longueur',
+  '语言': 'Langue',
+  '往左更短，往右更详细': 'À gauche plus court, à droite plus détaillé',
+  '简洁': 'Bref',
+  '正常': 'Normal',
+  '详细': 'Détaillé',
+  '深灰': 'Gris foncé',
+  '彩虹': 'Arc-en-ciel',
+  '青': 'Cyan',
+  '浅玉': 'Jade pâle',
+  '纸白': 'Blanc papier',
+  '琥珀': 'Ambre',
+  '小': 'Petit',
+  '中': 'Moyen',
+  '大': 'Grand',
+  '直角，无阴影': 'Angles droits, sans ombre',
+  '渐变描边，唯一带发光的一套': 'Bordure en dégradé, le seul qui brille',
+  '切角，单色': 'Coin coupé, monochrome',
+  '浅底深字，大圆角': 'Fond clair, texte foncé, grands arrondis',
+  '纸色，靠字距': 'Couleur papier, via le interlettrage',
+  '等宽，琥珀屏': 'Chasse fixe, écran ambre',
+  '宽 280，13 号字': 'Largeur 280, 13 points',
+  '宽 360，14 号字': 'Largeur 360, 14 points',
+  '宽 460，16 号字': 'Largeur 460, 16 points',
+  '词林 · 外观、长度、语言都在这里': 'Wort Grove · apparence, longueur, langue',
+  '下面的模型配置和上面这些互不影响': 'Le modèle ci-dessous est indépendant de ceci',
+  '保存失败': 'Échec de l’enregistrement',
+  '不用填': 'Inutile',
+  '批注': 'Annotation',
+  '批注模式': 'Mode annotation',
+  '批注已清空': 'Annotations effacées',
+  '划掉': 'Barrer',
+  '改写': 'Réécrire',
+  '已发生': 'Déjà survenu',
+  '解释这段文本': 'Expliquer ce texte',
+  '解释这段代码': 'Expliquer ce code',
+  '词林 · 设置': 'Wort Grove · Réglages',
+  '接口地址': 'Point d’accès',
+  '模型名': 'Modèle',
+  '钥匙': 'Clé',
+  '保存并测试': 'Enregistrer et tester',
+  '只测试': 'Tester seulement',
+  '正在读取…': 'Lecture…',
+  '正在保存…': 'Enregistrement…',
+  '当前生效': 'Actif',
+  '配置目录': 'Dossier de configuration',
+  '选区操作': 'Actions sur la sélection',
+  '先查询一次，才有释义可复制': 'Consultez d\'abord, puis le sens pourra être copié',
+};
+
+/** Español. */
+const ES = {
+  '复制': 'Copiar',
+  '查询': 'Consultar',
+  '右键拖': 'Arrastrar con derecho',
+  '换个说法': 'En simple',
+  '标出同领域': 'Marcar mismo campo',
+  '批注这段': 'Anotar',
+  '一次性': 'Una vez',
+  '收进生词本': 'Al vocabulario',
+  '复制释义': 'Copiar sentido',
+  '举个例子': 'Un ejemplo',
+  '翻译': 'Traducir',
+  '朗读': 'Leer en voz alta',
+  '复制引用块': 'Copiar cita',
+  '定位出处': 'Ir al origen',
+  '清空批注': 'Borrar anotaciones',
+  '返回': 'Volver',
+  '更多': 'Más',
+  '先查询一次': 'Consulta primero',
+  '先选中一段文字': 'Selecciona texto primero',
+  '已复制': 'Copiado',
+  '已复制释义': 'Sentido copiado',
+  '复制失败': 'No se pudo copiar',
+  '已收进生词本': 'Guardado en vocabulario',
+  '知识库': 'Base de conocimiento',
+  '画布上还没有卡片': 'Aún no hay tarjetas',
+  '图上还空着。圈第一个词试试。': 'Todavía vacío. Elige una primera palabra.',
+  '最多 4 层，这里不再展开': 'Cuatro niveles como máximo, aquí termina',
+  '最小化': 'Minimizar',
+  '关闭': 'Cerrar',
+  '回到上级': 'Al superior',
+  '没判定': 'Sin determinar',
+  '清空': 'Vaciar',
+  '清空这张图': 'Vaciar este lienzo',
+  '删掉这条': 'Borrar esto',
+  '再试一次': 'Otra vez',
+  '重新解释这个词': 'Explicar otra vez',
+  '还没有消息': 'Aún no hay mensajes',
+  '上下文': 'Contexto',
+  '模型': 'Modelo',
+  '已开启': 'Activado',
+  '已关闭': 'Desactivado',
+  '现在': 'ahora',
+  '你': 'Tú',
+  '答': 'R',
+  '外观': 'Aspecto',
+  '卡片大小': 'Tamaño',
+  '解释长度': 'Longitud',
+  '语言': 'Idioma',
+  '往左更短，往右更详细': 'Izquierda más corto, derecha más detallado',
+  '简洁': 'Breve',
+  '正常': 'Normal',
+  '详细': 'Detallado',
+  '深灰': 'Gris oscuro',
+  '彩虹': 'Arcoíris',
+  '青': 'Cian',
+  '浅玉': 'Jade claro',
+  '纸白': 'Blanco papel',
+  '琥珀': 'Ámbar',
+  '小': 'Pequeño',
+  '中': 'Mediano',
+  '大': 'Grande',
+  '直角，无阴影': 'Ángulos rectos, sin sombra',
+  '渐变描边，唯一带发光的一套': 'Borde degradado, el único que brilla',
+  '切角，单色': 'Esquina cortada, monocromo',
+  '浅底深字，大圆角': 'Fondo claro, letra oscura, muy redondeado',
+  '纸色，靠字距': 'Color papel, con espaciado',
+  '等宽，琥珀屏': 'Monoespaciado, pantalla ámbar',
+  '宽 280，13 号字': 'Ancho 280, 13 puntos',
+  '宽 360，14 号字': 'Ancho 360, 14 puntos',
+  '宽 460，16 号字': 'Ancho 460, 16 puntos',
+  '词林 · 外观、长度、语言都在这里': 'Wort Grove · aspecto, longitud, idioma',
+  '下面的模型配置和上面这些互不影响': 'El modelo de abajo no depende de esto',
+  '保存失败': 'No se pudo guardar',
+  '不用填': 'No hace falta',
+  '批注': 'Anotación',
+  '批注模式': 'Modo anotación',
+  '批注已清空': 'Anotaciones borradas',
+  '划掉': 'Tachar',
+  '改写': 'Reescribir',
+  '已发生': 'Ya ocurrió',
+  '解释这段文本': 'Explicar este texto',
+  '解释这段代码': 'Explicar este código',
+  '词林 · 设置': 'Wort Grove · Ajustes',
+  '接口地址': 'Punto de acceso',
+  '模型名': 'Modelo',
+  '钥匙': 'Clave',
+  '保存并测试': 'Guardar y probar',
+  '只测试': 'Solo probar',
+  '正在读取…': 'Leyendo…',
+  '正在保存…': 'Guardando…',
+  '当前生效': 'Activo',
+  '配置目录': 'Carpeta de configuración',
+  '选区操作': 'Acciones de selección',
+  '先查询一次，才有释义可复制': 'Consulta primero y podrás copiar el sentido',
+};
+
+/** Русский. */
+const RU = {
+  '复制': 'Копировать',
+  '查询': 'Посмотреть',
+  '右键拖': 'Правой кнопкой',
+  '换个说法': 'Простыми словами',
+  '标出同领域': 'Отметить ту же область',
+  '批注这段': 'Пометить',
+  '一次性': 'Один раз',
+  '收进生词本': 'В словарь',
+  '复制释义': 'Копировать значение',
+  '举个例子': 'Пример',
+  '翻译': 'Перевести',
+  '朗读': 'Прочитать вслух',
+  '复制引用块': 'Копировать цитату',
+  '定位出处': 'К источнику',
+  '清空批注': 'Очистить пометки',
+  '返回': 'Назад',
+  '更多': 'Ещё',
+  '先查询一次': 'Сначала посмотрите',
+  '先选中一段文字': 'Сначала выделите текст',
+  '已复制': 'Скопировано',
+  '已复制释义': 'Значение скопировано',
+  '复制失败': 'Не удалось скопировать',
+  '已收进生词本': 'Добавлено в словарь',
+  '知识库': 'База знаний',
+  '画布上还没有卡片': 'На холсте пока нет карточек',
+  '图上还空着。圈第一个词试试。': 'Пока пусто. Выберите первое слово.',
+  '最多 4 层，这里不再展开': 'Не больше четырёх уровней, дальше не раскрывается',
+  '最小化': 'Свернуть',
+  '关闭': 'Закрыть',
+  '回到上级': 'К родителю',
+  '没判定': 'Не определено',
+  '清空': 'Очистить',
+  '清空这张图': 'Очистить холст',
+  '删掉这条': 'Удалить это',
+  '再试一次': 'Ещё раз',
+  '重新解释这个词': 'Объяснить это слово заново',
+  '还没有消息': 'Сообщений пока нет',
+  '上下文': 'Контекст',
+  '模型': 'Модель',
+  '已开启': 'Включено',
+  '已关闭': 'Выключено',
+  '现在': 'только что',
+  '你': 'Вы',
+  '答': 'О',
+  '外观': 'Вид',
+  '卡片大小': 'Размер карточек',
+  '解释长度': 'Длина',
+  '语言': 'Язык',
+  '往左更短，往右更详细': 'Левее короче, правее подробнее',
+  '简洁': 'Кратко',
+  '正常': 'Обычно',
+  '详细': 'Подробно',
+  '深灰': 'Тёмно-серый',
+  '彩虹': 'Радуга',
+  '青': 'Бирюза',
+  '浅玉': 'Светлый нефрит',
+  '纸白': 'Бумажный',
+  '琥珀': 'Янтарь',
+  '小': 'Маленький',
+  '中': 'Средний',
+  '大': 'Большой',
+  '直角，无阴影': 'Прямые углы, без тени',
+  '渐变描边，唯一带发光的一套': 'Градиентная рамка, единственная со свечением',
+  '切角，单色': 'Срезанный угол, один цвет',
+  '浅底深字，大圆角': 'Светлый фон, тёмный текст, крупные скругления',
+  '纸色，靠字距': 'Цвет бумаги, за счёт разрядки',
+  '等宽，琥珀屏': 'Моноширинный, янтарный экран',
+  '宽 280，13 号字': 'Ширина 280, 13 пунктов',
+  '宽 360，14 号字': 'Ширина 360, 14 пунктов',
+  '宽 460，16 号字': 'Ширина 460, 16 пунктов',
+  '词林 · 外观、长度、语言都在这里': 'Wort Grove · вид, длина, язык',
+  '下面的模型配置和上面这些互不影响': 'Настройки модели ниже от этого не зависят',
+  '保存失败': 'Не удалось сохранить',
+  '不用填': 'Не требуется',
+  '批注': 'Пометка',
+  '批注模式': 'Режим пометок',
+  '批注已清空': 'Пометки очищены',
+  '划掉': 'Зачеркнуть',
+  '改写': 'Переписать',
+  '已发生': 'Уже случилось',
+  '解释这段文本': 'Объяснить этот текст',
+  '解释这段代码': 'Объяснить этот код',
+  '词林 · 设置': 'Wort Grove · Настройки',
+  '接口地址': 'Адрес API',
+  '模型名': 'Модель',
+  '钥匙': 'Ключ',
+  '保存并测试': 'Сохранить и проверить',
+  '只测试': 'Только проверить',
+  '正在读取…': 'Чтение…',
+  '正在保存…': 'Сохранение…',
+  '当前生效': 'Активно',
+  '配置目录': 'Папка настроек',
+  '选区操作': 'Действия с выделением',
+  '先查询一次，才有释义可复制': 'Сначала посмотрите, потом значение можно скопировать',
+};
+/** 语言表。zh-CN 直接用原文，不需要映射。 */
+const TABLES = { 'zh-TW': ZH_TW, en: EN, ja: JA, ko: KO, de: DE, fr: FR, es: ES, ru: RU };
+
+/**
+ * 取当前语言的文案。
+ *
+ * @param {string} text - 中文原文。
+ * @param {string} [lang] - 语言；不传就读 <html data-knest-lang>。
+ * @returns {string} 该语言的文案；没翻到的返回原文。
+ */
+function t(text, lang) {
+  const code = lang ?? globalThis.document?.documentElement?.getAttribute('data-knest-lang') ?? 'zh-CN';
+  if (code === 'zh-CN') return text;
+  const table = TABLES[code];
+  if (table === undefined) return text;
+  return table[text] ?? text;
+}
+
+/**
+ * 按当前语言格式化数字与单位之间要不要空格。
+ * 中文不加空格，英文日文加。
+ * @param {string} text - 文字。
+ * @returns {boolean} 是否该加空格。
+ */
+function needsSpace() {
+  const code = globalThis.document?.documentElement?.getAttribute('data-knest-lang') ?? 'zh-CN';
+  return code !== 'zh-CN';
+}
+
+/** 导出字典，供测试核对覆盖率。 */
+const DICTS = { 'zh-TW': ZH_TW, en: EN, ja: JA, ko: KO, de: DE, fr: FR, es: ES, ru: RU };
+
+
+/* ===== client/look-fab.js ===== */
+/**
+ * 右下角的词林入口 + 外观浮层。
+ *
+ * 为什么单独一个文件：DSH 版是 React，Cherry 版是纯 DOM，两边都想要
+ * 「右下角一个按钮，点开调风格」，那就用一个不依赖 React 的实现，
+ * 各自 mount 一次即可。
+ *
+ * 浮层里只放外观四件（风格 / 卡片大小 / 解释长度 / 语言），
+ * 模型与钥匙那部分仍归各宿主自己的设置——两件事不要混在一起。
+ */
+
+
+const HOST_ID = 'knest-look-fab';
+
+/**
+ * 挂上入口按钮与浮层。
+ *
+ * @param {{doc?:Document, win?:object, onToast?:Function}} [options] - 参数。
+ * @returns {{dispose:Function, el:HTMLElement, open:Function, close:Function}} 句柄。
+ */
+function mountLookFab(options = {}) {
+  const win = options.win ?? globalThis;
+  const doc = options.doc ?? win.document;
+  if (!doc?.body) {
+    return { dispose: () => {}, el: doc?.createElement?.('div') ?? null, open: () => {}, close: () => {} };
+  }
+
+  /* 已经挂过就先摘掉，避免热重载叠出两个按钮 */
+  doc.getElementById(HOST_ID)?.remove();
+
+  applyPrefs();
+
+  const host = doc.createElement('div');
+  host.id = HOST_ID;
+
+  /* 按钮 */
+  const btn = doc.createElement('button');
+  btn.type = 'button';
+  btn.className = 'knest-logo-btn';
+  btn.title = t('词林 · 外观、长度、语言都在这里');
+  btn.innerHTML = '<span class="g">词</span><span class="knest-fab-txt">词林</span>';
+
+  /* 语言代码直接挂在按钮上：出问题时一眼能看出是「代码没生效」还是「逻辑有问题」 */
+  const badge = doc.createElement('span');
+  badge.className = 'knest-fab-lang';
+  btn.appendChild(badge);
+
+  /**
+   * 刷新按钮上的语言标记。
+   * @returns {void}
+   */
+  const paintBadge = () => {
+    badge.textContent = readPrefs().lang;
+  };
+  paintBadge();
+
+  /* 浮层 */
+  const panel = doc.createElement('div');
+  panel.className = 'knest-look-panel';
+  panel.setAttribute('data-open', 'false');
+
+  const head = doc.createElement('div');
+  head.className = 'knest-look-head';
+  const title = doc.createElement('b');
+  title.textContent = t('外观');
+  const x = doc.createElement('button');
+  x.type = 'button';
+  x.className = 'knest-look-x';
+  x.textContent = '×';
+  x.title = t('关闭');
+  head.appendChild(title);
+  head.appendChild(x);
+
+  const appearance = createAppearanceSection({ doc, onChange: () => {} });
+
+  panel.appendChild(head);
+  panel.appendChild(appearance.el);
+
+  host.appendChild(btn);
+  host.appendChild(panel);
+  doc.body.appendChild(host);
+
+  let open = false;
+
+  /**
+   * 开关浮层。
+   * @param {boolean} [next] - 指定开或关；不传就切换。
+   * @returns {void}
+   */
+  const setOpen = (next) => {
+    open = next === undefined ? !open : Boolean(next);
+    panel.setAttribute('data-open', open ? 'true' : 'false');
+    btn.setAttribute('data-open', open ? 'true' : 'false');
+  };
+
+  const onBtn = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setOpen();
+  };
+  const onX = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setOpen(false);
+  };
+  /* 点面板以外的地方收起。用捕获阶段，免得被宿主的点击拦住 */
+  const onDocDown = (event) => {
+    if (!open) return;
+    if (host.contains(event.target)) return;
+    setOpen(false);
+  };
+  const onKey = (event) => {
+    if (event.key === 'Escape' && open) setOpen(false);
+  };
+
+  btn.addEventListener('click', onBtn);
+  btn.addEventListener('contextmenu', (event) => event.stopPropagation());
+  x.addEventListener('click', onX);
+  const onPrefs = () => {
+    paintBadge();
+    appearance.refresh?.();
+    title.textContent = t('外观');
+  };
+  win.addEventListener?.('knest-prefs', onPrefs);
+
+  doc.addEventListener('pointerdown', onDocDown, true);
+  doc.addEventListener('keydown', onKey, true);
+
+  return {
+    el: host,
+    open: () => setOpen(true),
+    close: () => setOpen(false),
+    /**
+     * 摘掉按钮、浮层和全部监听。
+     * @returns {void}
+     */
+    dispose: () => {
+      btn.removeEventListener('click', onBtn);
+      x.removeEventListener('click', onX);
+      doc.removeEventListener('pointerdown', onDocDown, true);
+      doc.removeEventListener('keydown', onKey, true);
+      win.removeEventListener?.('knest-prefs', onPrefs);
+      host.remove();
+    },
+  };
+}
+
+
 /* ===== client/phrase.js ===== */
 /**
  * 圈词：把"右键拖过的两点"变成一句能拿去问模型的文本。
@@ -725,11 +2146,14 @@ function createExplainApi(options = {}) {
       const phrase = typeof input?.phrase === 'string' ? input.phrase.trim() : '';
       if (phrase === '') return { ok: false, error: { code: 'bad-request', message: '没有圈出文本', retryable: false } };
       const mode = typeof input?.mode === 'string' && input.mode !== '' ? input.mode : 'default';
-      const key = `${input?.sessionId ?? ''}|${phrase}|${input?.fingerprint ?? ''}|${mode}`;
+      const prefsForCache = readPrefs();
+      const key = `${input?.sessionId ?? ''}|${phrase}|${input?.fingerprint ?? ''}|${mode}|${prefsForCache.lang}|${prefsForCache.charLimit}`;
       if (input?.force !== true) {
         const hit = memory.get(key);
         if (hit !== undefined) return { ...hit, cached: true };
       }
+      /* 语言与字数跟着面板走：用户切了语言，下一次解释就用那个语言答。 */
+      const prefs = readPrefs();
       const payload = await send('POST', {
         phrase,
         sentence: typeof input?.sentence === 'string' ? input.sentence : '',
@@ -737,6 +2161,8 @@ function createExplainApi(options = {}) {
         fingerprint: typeof input?.fingerprint === 'string' ? input.fingerprint : '',
         model: typeof input?.model === 'string' ? input.model : '',
         mode,
+        lang: prefs.lang,
+        limit: prefs.charLimit,
       });
       if (payload.ok === true && payload.data !== null && typeof payload.data === 'object') {
         const result = { ok: true, data: payload.data, cached: payload.cached === true, model: payload.model, ms: payload.ms };
@@ -1533,9 +2959,11 @@ function createMenu(options = {}) {
   const ensureRoot = () => {
     if (doc === null) return null;
     if (root !== null && root.isConnected !== false) return root;
-    const existing = typeof doc.getElementById === 'function' ? doc.getElementById(MENU_ID) : null;
-    if (existing !== null && existing !== undefined) {
-      root = existing;
+    /* 注入两遍时页面上会有两个同 id 的层，只留最后一个，其余拆掉 */
+    const all = typeof doc.querySelectorAll === 'function' ? [...doc.querySelectorAll('#' + MENU_ID)] : [];
+    if (all.length > 0) {
+      for (const extra of all.slice(0, -1)) extra.remove();
+      root = all[all.length - 1];
       root.textContent = '';
       return root;
     }
@@ -1578,7 +3006,7 @@ function createMenu(options = {}) {
     if (next === 'more') {
       const back = menuEl(doc, 'button', { class: 'knest-mi knest-mi-lead', type: 'button', 'data-nav': 'back' }, [
         menuIcon(doc, 'back'),
-        menuEl(doc, 'span', { class: 'knest-mi-label', text: '返回' }),
+        menuEl(doc, 'span', { class: 'knest-mi-label', text: t('返回') }),
       ]);
       back.addEventListener('click', (event) => {
         event.preventDefault();
@@ -1597,12 +3025,12 @@ function createMenu(options = {}) {
         'data-action': item.action,
         disabled: item.disabled === true,
         title: item.disabled === true
-          ? (item.action === 'copy-explain' ? '先查询一次，才有释义可复制' : '先选中一段文字')
-          : item.label,
+          ? (item.action === 'copy-explain' ? t('先查询一次，才有释义可复制') : t('先选中一段文字'))
+          : t(item.label),
       }, [
         menuIcon(doc, item.action),
-        menuEl(doc, 'span', { class: 'knest-mi-label', text: item.label }),
-        menuEl(doc, 'span', { class: 'knest-mi-hint', text: item.hint }),
+        menuEl(doc, 'span', { class: 'knest-mi-label', text: t(item.label) }),
+        menuEl(doc, 'span', { class: 'knest-mi-hint', text: t(item.hint) }),
       ]);
       box.appendChild(button);
     }
@@ -1611,7 +3039,7 @@ function createMenu(options = {}) {
       box.appendChild(menuEl(doc, 'div', { class: 'knest-mdiv' }));
       const more = menuEl(doc, 'button', { class: 'knest-mi knest-mi-more', type: 'button', 'data-nav': 'more' }, [
         menuIcon(doc, 'more'),
-        menuEl(doc, 'span', { class: 'knest-mi-label', text: '更多' }),
+        menuEl(doc, 'span', { class: 'knest-mi-label', text: t('更多') }),
       ]);
       more.addEventListener('click', (event) => {
         event.preventDefault();
@@ -1634,11 +3062,15 @@ function createMenu(options = {}) {
     show(rect, data) {
       const host = ensureRoot();
       if (host === null) return;
+      /* 复用 root 时先把上一次的菜单拆干净：
+         不清的话旧 menu 会留在层里，既叠出两个，也让人看到旧语言的文字。 */
+      host.textContent = '';
+      box = null;
       hide();
       anchor = rect ?? { left: 8, top: 8, right: 8, bottom: 8 };
       payload = data ?? { phrase: '', selection: '', hasSelection: false, hasExplain: false };
 
-      box = menuEl(doc, 'div', { class: 'knest-menu', role: 'menu', 'aria-label': '选区操作' });
+      box = menuEl(doc, 'div', { class: 'knest-menu', role: 'menu', 'aria-label': t('选区操作') });
       box.addEventListener('mousedown', (event) => event.preventDefault());
       box.addEventListener('click', (event) => {
         const target = event.target;
@@ -3234,6 +4666,7 @@ function createTreeBoard(options = {}) {
  */
 
 /** 样式版本号：写进 style 标签，方便一眼确认浏览器里跑的是哪一版。 */
+
 const KNEST_STYLE_REV = 'r2';
 
 /** 样式正文。 */
@@ -3360,7 +4793,7 @@ const KNEST_CSS = [
   '.knest-edge-tab span{display:block;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:.26em;font-size:11.5px;line-height:1;white-space:nowrap}',
   '.knest-edge-tab[data-alert="1"]::after{content:"";position:absolute;top:8px;right:7px;width:7px;height:7px;border-radius:50%;background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.22);animation:knest-pulse 1.8s ease-in-out infinite}',
   '@keyframes knest-pulse{0%,100%{opacity:1}50%{opacity:.35}}',
-  '.knest-settings{position:fixed;right:18px;bottom:62px;width:352px;max-height:calc(100vh - 110px);overflow:auto;z-index:2147483004;background:var(--kn-panel);border:1px solid var(--kn-rule);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.42);color:var(--kn-ink);font-size:12.5px;line-height:1.6;padding:14px 16px 16px;display:none}',
+  '.knest-settings{position:fixed;right:18px;bottom:64px;width:352px;max-height:calc(100vh - 110px);overflow:auto;z-index:2147483004;background:var(--kn-panel);border:1px solid var(--kn-rule);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.42);color:var(--kn-ink);font-size:12.5px;line-height:1.6;padding:14px 16px 16px;display:none}',
   '.knest-settings[data-open="true"]{display:block}',
   '.knest-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}',
   '.knest-set-head b{font-size:13px;font-weight:600}',
@@ -3397,7 +4830,7 @@ const KNEST_CSS = [
 
   /* ── 右键菜单（关掉圈词时用） ─────────────────────────────────── */
   '#knest-menu-layer{position:fixed;inset:0;z-index:2147483001;pointer-events:none}',
-  '.knest-menu{position:absolute;pointer-events:auto;min-width:176px;padding:5px;background:var(--kn-panel);color:var(--kn-ink);border:1px solid var(--kn-rule);box-shadow:var(--kn-shadow);font-size:12.5px;line-height:1.5}',
+  '.knest-menu{position:absolute;pointer-events:auto;min-width:176px;padding:5px;background:var(--kn-panel);color:var(--kn-ink);border:1px solid var(--kn-rule);box-shadow:none;font-size:12.5px;line-height:1.5}',
   '.knest-mi{display:flex;align-items:center;gap:9px;width:100%;padding:6px 8px;border:0;background:none;color:var(--kn-ink);font:inherit;text-align:left;cursor:pointer}',
   '.knest-mi:hover:not(:disabled){background:var(--kn-echo-soft)}',
   '.knest-mi:disabled{opacity:.36;cursor:default}',
@@ -3540,18 +4973,660 @@ function ensureStyles(doc) {
       ? document.querySelector('style[data-knest-style]')
       : null;
     if (existing !== null && existing !== undefined) {
-      if (existing.textContent !== KNEST_CSS) existing.textContent = KNEST_CSS;
+      const full = KNEST_CSS + '\n' + KNEST_SKIN_CSS.join('\n');
+      if (existing.textContent !== full) existing.textContent = full;
       existing.setAttribute('data-knest-style', KNEST_STYLE_REV);
       return;
     }
     const style = document.createElement('style');
     style.setAttribute('data-knest-style', KNEST_STYLE_REV);
-    style.textContent = KNEST_CSS;
+    style.textContent = KNEST_CSS + '\n' + KNEST_SKIN_CSS.join('\n');
     const head = document.head ?? document.body;
     if (head !== null && head !== undefined && typeof head.appendChild === 'function') head.appendChild(style);
   } catch {
     /* 样式注入失败不影响功能 */
   }
+}
+
+
+/* ===== client/skins.js ===== */
+/**
+ * 六种外观。
+ *
+ * 上一版的问题是「六套只换颜色」——形状、边框、字重、圆角全都一样，
+ * 等于一套皮复制六遍，用户切过去除了颜色什么都感觉不到。
+ *
+ * 这一版每套在**结构**上就不一样：
+ *   深灰   直角、无圆角、极细边、无阴影，靠留白撑
+ *   彩虹   唯一一套带发光的。圆角最大，边缘一道渐变描边（不是糊一层光晕）
+ *   青     切角（不是圆角），单色，靠线宽区分层级
+ *   浅玉   浅底深字，大圆角，无边框只有投影
+ *   纸白   纸色，几乎无阴影，缩进靠字距
+ *   琥珀   等宽，方角，1px 实线，像老终端的琥珀屏（不是绿）
+ *
+ * 唯一允许张扬的是「彩虹」，其余五套都要安静——一套里只花一次力气。
+ */
+
+/** 皮肤样式版本。 */
+const KNEST_SKIN_REV = 's2';
+
+const KNEST_SKIN_CSS = [
+  /* ── 深灰：直角、无阴影、靠留白 ──────────────────────────────── */
+  `html[data-knest-skin="ink"]{
+    --kn-bg:#0d0d0f; --kn-panel:#141416; --kn-rule:#2a2a2e;
+    --kn-ink:#f0f0f2; --kn-mute:#82828a;
+    --kn-signal:#e8e8ec; --kn-echo:#f0f0f2; --kn-echo-soft:rgba(240,240,242,.10);
+    --kn-domain:#a0a0aa; --kn-domain-soft:rgba(160,160,170,.10);
+    --kn-shadow:none;
+    --kn-card-radius:0px; --kn-card-border:#2a2a2e;
+    --kn-card-border-width:1px; --kn-card-pad:16px 18px;
+  }
+  html[data-knest-skin="ink"] .knest-tnode{box-shadow:none}
+  html[data-knest-skin="ink"] .knest-tnode-title{font-weight:600;letter-spacing:.01em}`,
+
+  /* ── 彩虹：唯一张扬的一套。大圆角 + 边缘渐变描边 ─────────────── */
+  `html[data-knest-skin="nebula"]{
+    --kn-bg:#08080e; --kn-panel:#101018; --kn-rule:#282840;
+    --kn-ink:#f4f4ff; --kn-mute:#8a8ab0;
+    --kn-signal:#c4b5fd; --kn-echo:#a5f3fc; --kn-echo-soft:rgba(165,243,252,.14);
+    --kn-domain:#fbcfe8; --kn-domain-soft:rgba(251,207,232,.14);
+    --kn-shadow:0 18px 46px rgba(0,0,0,.55);
+    --kn-card-radius:20px; --kn-card-border:transparent;
+    --kn-card-border-width:0px; --kn-card-pad:18px 20px;
+  }
+  /* 渐变边框：双背景 + background-clip，不用 mask（mask-composite 在 Edge 上会把整块裁掉） */
+  html[data-knest-skin="nebula"] .knest-tnode{
+    border:1.5px solid transparent;
+    background-image:linear-gradient(var(--kn-panel,#101018),var(--kn-panel,#101018)),
+                     conic-gradient(from 140deg,#fbcfe8,#c4b5fd,#a5f3fc,#fde68a,#fbcfe8);
+    background-origin:border-box;
+    background-clip:padding-box,border-box;
+    overflow:hidden;
+  }
+  html[data-knest-skin="nebula"] .knest-tnode[data-depth="0"]{
+    border-width:2px;
+    filter:drop-shadow(0 0 18px rgba(196,181,253,.28));
+  }
+  html[data-knest-skin="nebula"] .knest-tnode[data-selected="true"]{
+    filter:drop-shadow(0 0 26px rgba(196,181,253,.45));
+  }`,
+
+  /* ── 青：切角，单色，靠线宽分层次 ─────────────────────────────── */
+  `html[data-knest-skin="neon"]{
+    --kn-bg:#0a0c10; --kn-panel:#0e1218; --kn-rule:#1c2836;
+    --kn-ink:#e8f4f8; --kn-mute:#7a94a4;
+    --kn-signal:#22d3ee; --kn-echo:#22d3ee; --kn-echo-soft:rgba(34,211,238,.12);
+    --kn-domain:#94a3b8; --kn-domain-soft:rgba(148,163,184,.12);
+    --kn-shadow:0 14px 36px rgba(0,0,0,.48);
+    --kn-card-radius:0px; --kn-card-border:rgba(34,211,238,.34);
+    --kn-card-border-width:1px; --kn-card-pad:16px 18px;
+  }
+  /* 右上角切一刀：用 clip-path，不加发光 */
+  html[data-knest-skin="neon"] .knest-tnode{
+    clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%);
+    border-width:1px;
+  }
+  html[data-knest-skin="neon"] .knest-tnode[data-depth="0"]{border-width:2px}
+  html[data-knest-skin="neon"] .knest-tnode-title{font-weight:700;letter-spacing:.02em}`,
+
+  /* ── 浅玉：浅底深字，大圆角，只有投影没有边框 ────────────────── */
+  `html[data-knest-skin="jade"]{
+    --kn-bg:#eef3f0; --kn-panel:#f8fbf9; --kn-rule:#d3e0da;
+    --kn-ink:#1b2b26; --kn-mute:#6b837b;
+    --kn-signal:#3f7d68; --kn-echo:#2d6b56; --kn-echo-soft:rgba(45,107,86,.12);
+    --kn-domain:#8a7a4e; --kn-domain-soft:rgba(138,122,78,.12);
+    --kn-shadow:0 14px 34px rgba(27,43,38,.13),0 2px 6px rgba(27,43,38,.06);
+    --kn-card-radius:26px; --kn-card-border:transparent;
+    --kn-card-border-width:0px; --kn-card-pad:20px 22px;
+  }
+  html[data-knest-skin="jade"] .knest-tnode{border:0}
+  html[data-knest-skin="jade"] .knest-tnode-title{font-weight:600}`,
+
+  /* ── 纸白：纸色，几乎无阴影，靠字距和缩进 ───────────────────── */
+  `html[data-knest-skin="paper"]{
+    --kn-bg:#efeae0; --kn-panel:#f7f4ec; --kn-rule:#ddd6c8;
+    --kn-ink:#2f2a22; --kn-mute:#84796a;
+    --kn-signal:#5c5346; --kn-echo:#3f5c4a; --kn-echo-soft:rgba(63,92,74,.11);
+    --kn-domain:#7a5c3f; --kn-domain-soft:rgba(122,92,63,.11);
+    --kn-shadow:none;
+    --kn-card-radius:3px; --kn-card-border:#ddd6c8;
+    --kn-card-border-width:1px; --kn-card-pad:15px 17px;
+  }
+  html[data-knest-skin="paper"] .knest-tnode{box-shadow:inset 0 0 0 1px rgba(255,255,255,.6)}
+  html[data-knest-skin="paper"] .knest-tnode-title{letter-spacing:.04em}
+  html[data-knest-skin="paper"] .knest-tnode-lead{line-height:1.85}`,
+
+  /* ── 琥珀：等宽方角实线，老终端那种琥珀屏，不是绿 ────────────── */
+  `html[data-knest-skin="mono"]{
+    --kn-bg:#0c0a06; --kn-panel:#12100a; --kn-rule:#2e2718;
+    --kn-ink:#f5d9a0; --kn-mute:#a08655;
+    --kn-signal:#ffb000; --kn-echo:#ffb000; --kn-echo-soft:rgba(255,176,0,.12);
+    --kn-domain:#c89a4a; --kn-domain-soft:rgba(200,154,74,.12);
+    --kn-shadow:none;
+    --kn-card-radius:0px; --kn-card-border:#2e2718;
+    --kn-card-border-width:1px; --kn-card-pad:14px 16px;
+  }
+  html[data-knest-skin="mono"] .knest-tnode{border-style:solid}
+  html[data-knest-skin="mono"] .knest-tnode,
+  html[data-knest-skin="mono"] .knest-tnode-title,
+  html[data-knest-skin="mono"] .knest-tnode-lead,
+  html[data-knest-skin="mono"] .knest-tnode-kind{
+    font-family:"Cascadia Mono",Consolas,"SF Mono",monospace !important;
+  }
+  html[data-knest-skin="mono"] .knest-tnode-title{font-weight:400;letter-spacing:0}`,
+
+  /* ── 把变量接到卡片上 ────────────────────────────────────────── */
+  `html[data-knest-skin] .knest-tnode{
+    border-radius:var(--kn-card-radius,14px);
+    border:var(--kn-card-border-width,1px) solid var(--kn-card-border,rgba(255,255,255,.14));
+    box-shadow:var(--kn-shadow,none);
+  }
+  html[data-knest-skin] .knest-tnode-body{padding:var(--kn-card-pad,10px 12px 11px)}`,
+
+  /* ── 尺寸：跟着外观走，但只改度量不改结构 ─────────────────────── */
+  `html[data-knest-size="sm"] .knest-tnode{width:280px}
+   html[data-knest-size="sm"] .knest-tnode-title{font-size:13px}
+   html[data-knest-size="sm"] .knest-tnode-lead{font-size:11.5px;line-height:1.62}`,
+
+  `html[data-knest-size="md"] .knest-tnode{width:340px}
+   html[data-knest-size="md"] .knest-tnode-title{font-size:15px}
+   html[data-knest-size="md"] .knest-tnode-lead{font-size:12.5px;line-height:1.72}`,
+
+  `html[data-knest-size="lg"] .knest-tnode{width:460px}
+   html[data-knest-size="lg"] .knest-tnode-title{font-size:19px}
+   html[data-knest-size="lg"] .knest-tnode-lead{font-size:14.5px;line-height:1.8}
+   html[data-knest-size="lg"] .knest-tnode-bar{height:38px}`,
+
+  /* ── 左下角的词林入口 ─────────────────────────────────────────── */
+  `.knest-logo-btn{
+    position:fixed; right:16px; bottom:16px; z-index:2147483000;
+    display:flex; align-items:center; gap:8px; height:36px; padding:0 13px 0 9px;
+    border-radius:10px; cursor:pointer; user-select:none;
+    background:var(--kn-panel,#141416); color:var(--kn-ink,#f0f0f2);
+    border:1px solid var(--kn-card-border,#2a2a2e);
+    box-shadow:0 8px 24px rgba(0,0,0,.36);
+    font:500 12.5px/1 "Microsoft YaHei",system-ui,sans-serif;
+    transition:box-shadow .16s ease, border-color .16s ease;
+  }
+  .knest-logo-btn:hover{border-color:var(--kn-signal,#e8e8ec)}
+  .knest-logo-btn .g{
+    width:20px; height:20px; border-radius:5px; display:grid; place-items:center;
+    background:var(--kn-signal,#e8e8ec); color:var(--kn-bg,#0d0d0f);
+    font:700 12px/1 "Songti SC","Noto Serif SC",serif;
+  }
+  .knest-logo-btn[data-alert="1"]::after{
+    content:""; position:absolute; left:-3px; top:-3px; width:8px; height:8px; border-radius:50%;
+    background:#e5484d; box-shadow:0 0 0 2px var(--kn-panel,#141416);
+  }`,
+
+  /* ── 设置面板的滑块：要"活" ─────────────────────────────────── */
+  `.knest-set-sliders{display:flex;flex-direction:column;gap:17px;margin:6px 0}
+  .knest-slider{display:block}
+  .knest-slider .top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
+  .knest-slider .nm{font-size:12.5px;color:var(--kn-ink,#f0f0f2);letter-spacing:.02em}
+  .knest-slider .vl{
+    font:600 12px/1 "Cascadia Mono",Consolas,monospace;color:var(--kn-echo,#f0f0f2);
+    font-variant-numeric:tabular-nums;transition:transform .18s ease;
+  }
+  /* 松手时数字弹一下，给一个"到位了"的手感 */
+  .knest-slider .vl.knest-bump{animation:knest-bump .26s cubic-bezier(.34,1.56,.64,1)}
+  @keyframes knest-bump{
+    0%{transform:scale(1)} 38%{transform:scale(1.22)} 100%{transform:scale(1)}
+  }
+  .knest-slider .note{font-size:11px;color:var(--kn-mute,#82828a);margin-top:7px;line-height:1.5}
+
+  .knest-slider input[type="range"]{
+    -webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px;
+    background:linear-gradient(90deg,
+      var(--kn-echo,#f0f0f2) 0%,
+      var(--kn-echo,#f0f0f2) var(--fill,50%),
+      rgba(128,128,140,.28) var(--fill,50%));
+    outline:none; cursor:pointer;
+    transition:height .14s ease;
+  }
+  .knest-slider input[type="range"]:active{height:6px}
+
+  .knest-slider input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:15px; height:15px; border-radius:4px;
+    background:var(--kn-panel,#141416); border:2px solid var(--kn-echo,#f0f0f2);
+    cursor:grab;
+    box-shadow:0 1px 4px rgba(0,0,0,.35);
+    transition:transform .16s cubic-bezier(.34,1.56,.64,1), box-shadow .16s ease, border-radius .16s ease;
+  }
+  .knest-slider input[type="range"]:hover::-webkit-slider-thumb{transform:scale(1.14)}
+  /* 按住时滑块头放大、变圆、周围透一圈光：手指压下去的分量 */
+  .knest-slider input[type="range"]:active::-webkit-slider-thumb{
+    transform:scale(1.32); border-radius:50%;
+    box-shadow:0 0 0 6px var(--kn-echo-soft,rgba(240,240,242,.16)),0 2px 8px rgba(0,0,0,.45);
+  }
+  .knest-slider input[type="range"]:focus-visible::-webkit-slider-thumb{
+    box-shadow:0 0 0 4px var(--kn-echo-soft,rgba(240,240,242,.24));
+  }
+  .knest-slider input[type="range"]::-moz-range-thumb{
+    width:13px; height:13px; border-radius:4px;
+    background:var(--kn-panel,#141416); border:2px solid var(--kn-echo,#f0f0f2);
+    cursor:grab; transition:transform .16s ease,border-radius .16s ease;
+  }
+  .knest-slider input[type="range"]:active::-moz-range-thumb{transform:scale(1.3);border-radius:50%}
+
+  .knest-set-preview{
+    margin-top:6px; padding:12px 14px; border-radius:var(--kn-card-radius,10px);
+    background:var(--kn-panel,#141416); border:1px solid var(--kn-card-border,#2a2a2e);
+    font-size:12.5px; color:var(--kn-ink,#f0f0f2); line-height:1.7; transition:min-height .18s ease;
+  }
+  .knest-set-preview b{display:block;font-size:14px;margin-bottom:5px;font-weight:600}`,
+
+  /* ── 右下角入口弹出的外观浮层 ─────────────────────────────────── */
+  `.knest-look-panel{
+    position:fixed; right:16px; bottom:64px; z-index:2147483001;
+    width:318px; max-height:calc(100vh - 130px); overflow:auto;
+    padding:14px 16px 16px; border-radius:12px;
+    background:var(--kn-panel,#141416);
+    border:1px solid var(--kn-rule,#2a2a2e);
+    box-shadow:0 10px 30px rgba(0,0,0,.4);
+    color:var(--kn-ink,#f0f0f2); font-size:12.5px; line-height:1.6;
+    display:none;
+  }
+  .knest-look-panel[data-open="true"]{display:block}
+  .knest-look-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .knest-look-head b{font-size:13px;font-weight:600}
+  .knest-look-x{
+    width:22px;height:22px;border:0;background:none;cursor:pointer;
+    color:var(--kn-mute,#82828a);font-size:17px;line-height:1;border-radius:5px;
+  }
+  .knest-look-x:hover{color:var(--kn-ink,#f0f0f2);background:var(--kn-rule,#2a2a2e)}
+  .knest-logo-btn[data-open="true"]{border-color:var(--kn-signal,#e8e8ec)}`,
+
+  /* ── 国旗语言选择器 ─────────────────────────────────────────────
+     Windows 的 emoji 字体没有区域指示符，🇨🇳 会变成 CN 两个字母。
+     所以国旗全部用 CSS 画：条纹走 linear-gradient，圆点走伪元素。 */
+  `.knest-langs{margin-top:4px}
+  .knest-langs-label{font-size:12.5px;color:var(--kn-ink,#f0f0f2);margin-bottom:10px;letter-spacing:.02em}
+  .knest-langs-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+
+  .knest-flag{
+    display:flex;align-items:center;gap:8px;
+    padding:7px 9px;border-radius:8px;cursor:pointer;
+    background:transparent;border:1px solid transparent;
+    color:var(--kn-mute,#82828a);font:500 11.5px/1.2 "Microsoft YaHei",system-ui,sans-serif;
+    text-align:left;
+    transition:background .16s ease, border-color .16s ease, color .16s ease, transform .16s cubic-bezier(.34,1.56,.64,1);
+  }
+  .knest-flag:hover{
+    background:var(--kn-rule,#2a2a2e);color:var(--kn-ink,#f0f0f2);
+    transform:translateY(-1px);
+  }
+  .knest-flag[data-on="1"]{
+    background:var(--kn-echo-soft,rgba(240,240,242,.12));
+    border-color:var(--kn-echo,#f0f0f2);
+    color:var(--kn-ink,#f0f0f2);
+  }
+  .knest-flag[data-on="1"] .knest-flag-box{
+    box-shadow:0 0 0 1.5px var(--kn-panel,#141416),0 0 0 2.5px var(--kn-echo,#f0f0f2);
+  }
+
+  .knest-flag-box{
+    flex:0 0 auto;width:22px;height:15px;border-radius:2px;overflow:hidden;
+    position:relative;background:#888;
+    transition:transform .16s cubic-bezier(.34,1.56,.64,1), box-shadow .16s ease;
+  }
+  .knest-flag:hover .knest-flag-box{transform:scale(1.18)}
+
+  .knest-flag-name{
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+
+  /* 简体：红底 + 左上黄星 */
+  .knest-flag-box[data-flag="zh-CN"]{background:#de2910}
+  .knest-flag-box[data-flag="zh-CN"]::after{
+    content:"★";position:absolute;left:1px;top:-2px;font-size:8px;color:#ffde00;line-height:1;
+  }
+  /* 繁體：青天白日满地红，简化成蓝角 + 红身 */
+  .knest-flag-box[data-flag="zh-TW"]{
+    background:linear-gradient(90deg,#000095 0 52%,#fe0000 52% 100%);
+  }
+  .knest-flag-box[data-flag="zh-TW"]::after{
+    content:"";position:absolute;left:3px;top:3px;width:6px;height:6px;border-radius:50%;
+    background:#fff;box-shadow:inset 0 0 0 1.5px #000095;
+  }
+  /* English：米字旗简化成红底白十字 + 蓝角 */
+  .knest-flag-box[data-flag="en"]{
+    background:
+      linear-gradient(90deg,transparent 44%,#fff 44% 56%,transparent 56%),
+      linear-gradient(0deg,transparent 38%,#fff 38% 62%,transparent 62%),
+      linear-gradient(90deg,transparent 47%,#cf142b 47% 53%,transparent 53%),
+      linear-gradient(0deg,transparent 44%,#cf142b 44% 56%,transparent 56%),
+      #012169;
+  }
+  /* 日本語：白底红圆 */
+  .knest-flag-box[data-flag="ja"]{background:#fff}
+  .knest-flag-box[data-flag="ja"]::after{
+    content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;
+    background:#bc002d;transform:translate(-50%,-50%);
+  }
+  /* 한국어：白底红蓝太极（简化成上下两半） */
+  .knest-flag-box[data-flag="ko"]{background:#fff}
+  .knest-flag-box[data-flag="ko"]::after{
+    content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;border-radius:50%;
+    background:linear-gradient(180deg,#cd2e3a 0 50%,#0047a0 50% 100%);
+    transform:translate(-50%,-50%);
+  }
+  /* Deutsch：黑红金横条 */
+  .knest-flag-box[data-flag="de"]{
+    background:linear-gradient(180deg,#000 0 33.3%,#dd0000 33.3% 66.6%,#ffce00 66.6% 100%);
+  }
+  /* Français：蓝白红竖条 */
+  .knest-flag-box[data-flag="fr"]{
+    background:linear-gradient(90deg,#002395 0 33.3%,#fff 33.3% 66.6%,#ed2939 66.6% 100%);
+  }
+  /* Español：红黄红横条 */
+  .knest-flag-box[data-flag="es"]{
+    background:linear-gradient(180deg,#aa151b 0 25%,#f1bf00 25% 75%,#aa151b 75% 100%);
+  }
+  /* Русский：白蓝红横条 */
+  .knest-flag-box[data-flag="ru"]{
+    background:linear-gradient(180deg,#fff 0 33.3%,#0039a6 33.3% 66.6%,#d52b1e 66.6% 100%);
+  }`,
+  `.knest-logo-btn .knest-fab-lang{
+    font:600 9.5px/1 "Cascadia Mono",Consolas,monospace;
+    letter-spacing:.04em;opacity:.55;margin-left:1px;
+    padding:1px 4px;border-radius:3px;
+    background:var(--kn-rule,#2a2a2e);
+  }`,
+];
+
+
+/* ===== client/lang-picker.js ===== */
+/**
+ * 语言选择：一排国旗，点一下就换，悬浮放大并浮出语言名。
+ *
+ * 为什么不用 emoji 国旗：Windows 的 Segoe UI Emoji 不含区域指示符，
+ * 🇨🇳 会渲染成「CN」两个字母。所以国旗全用 CSS 画——
+ * 横条竖条用 linear-gradient，圆形与星星用伪元素。
+ */
+
+
+/**
+ * 造国旗选择器。
+ *
+ * @param {{doc:Document, onChange?:Function}} options - 参数。
+ * @returns {{el:HTMLElement, refresh:Function}} 句柄。
+ */
+function createLanguagePicker(options) {
+  const doc = options.doc;
+  const onChange = typeof options.onChange === 'function' ? options.onChange : () => {};
+
+  let prefs = readPrefs();
+
+  const wrap = doc.createElement('div');
+  wrap.className = 'knest-langs';
+
+  const label = doc.createElement('div');
+  label.className = 'knest-langs-label';
+  label.textContent = t('语言');
+  wrap.appendChild(label);
+
+  const grid = doc.createElement('div');
+  grid.className = 'knest-langs-grid';
+  wrap.appendChild(grid);
+
+  const buttons = [];
+
+  for (const lang of LANGS) {
+    const btn = doc.createElement('button');
+    btn.type = 'button';
+    btn.className = 'knest-flag';
+    btn.setAttribute('data-lang', lang.id);
+    btn.setAttribute('aria-label', lang.label);
+    btn.title = lang.label;
+
+    const box = doc.createElement('span');
+    box.className = 'knest-flag-box';
+    box.setAttribute('data-flag', lang.id);
+
+    const name = doc.createElement('span');
+    name.className = 'knest-flag-name';
+    name.textContent = lang.label;
+
+    btn.appendChild(box);
+    btn.appendChild(name);
+    grid.appendChild(btn);
+    buttons.push({ btn, lang });
+
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      prefs = writePrefs({ lang: lang.id });
+      paint();
+      onChange('lang', lang.id);
+    });
+  }
+
+  /**
+   * 把选中态画上去。
+   * @returns {void}
+   */
+  const paint = () => {
+    label.textContent = t('语言');
+    for (const { btn, lang } of buttons) {
+      btn.setAttribute('data-on', lang.id === prefs.lang ? '1' : '0');
+      btn.title = lang.label;
+    }
+  };
+
+  paint();
+
+  return {
+    el: wrap,
+    /**
+     * 外部改了语言时同步。
+     * @returns {void}
+     */
+    refresh: () => {
+      prefs = readPrefs();
+      paint();
+    },
+  };
+}
+
+
+/* ===== client/appearance.js ===== */
+/**
+ * 设置面板里「外观」那一节。
+ *
+ * 长度滑块是**连续区间**（20–500 字），不是三档——三档只有三个落点，
+ * 拖起来发涩。拖动时数字、轨道填充、预览卡正文三处同时跟手，
+ * 松手有一个很短的回落，手感才"活"。
+ */
+
+
+const FULL_TEXT = '不是把东西摆整齐，而是让所有人对同一件事有同一个理解。开会前先说清要解决什么，避免各做各的。';
+
+/**
+ * 造「外观」区块。
+ *
+ * @param {{doc:Document, onChange?:Function}} options - 参数。
+ * @returns {{el:HTMLElement, refresh:Function}} 句柄。
+ */
+function createAppearanceSection(options) {
+  const doc = options.doc;
+  const onChange = typeof options.onChange === 'function' ? options.onChange : () => {};
+
+  let prefs = readPrefs();
+  const wrap = doc.createElement('div');
+  wrap.className = 'knest-set-sliders';
+
+  /**
+   * 造一个档位滑块。
+   * @param {object} row - { key, name, list, note }。
+   * @returns {object} 句柄。
+   */
+  const makeStepped = (row) => {
+    const box = doc.createElement('div');
+    box.className = 'knest-slider';
+
+    const top = doc.createElement('div');
+    top.className = 'top';
+    const nm = doc.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = row.name;
+    const vl = doc.createElement('span');
+    vl.className = 'vl';
+    top.appendChild(nm);
+    top.appendChild(vl);
+
+    const input = doc.createElement('input');
+    input.type = 'range';
+    input.min = '0';
+    input.max = String(row.list.length - 1);
+    input.step = '1';
+    input.className = 'knest-range';
+
+    const note = doc.createElement('div');
+    note.className = 'note';
+
+    box.appendChild(top);
+    box.appendChild(input);
+    box.appendChild(note);
+    wrap.appendChild(box);
+    return { row, input, vl, note, nm };
+  };
+
+  const skinH = makeStepped({ key: 'skin', name: '外观', list: THEMES, note: (i) => i.note });
+  const sizeH = makeStepped({ key: 'size', name: '卡片大小', list: SIZES, note: (i) => i.note });
+
+  /* ── 连续字数滑块 ───────────────────────────────────────────── */
+  const lenBox = doc.createElement('div');
+  lenBox.className = 'knest-slider';
+
+  const lenTop = doc.createElement('div');
+  lenTop.className = 'top';
+  const lenNm = doc.createElement('span');
+  lenNm.className = 'nm';
+  lenNm.textContent = '解释长度';
+  const lenVl = doc.createElement('span');
+  lenVl.className = 'vl knest-len-val';
+  lenTop.appendChild(lenNm);
+  lenTop.appendChild(lenVl);
+
+  const lenInput = doc.createElement('input');
+  lenInput.type = 'range';
+  lenInput.className = 'knest-range';
+  lenInput.min = String(CHAR_RANGE.min);
+  lenInput.max = String(CHAR_RANGE.max);
+  lenInput.step = String(CHAR_RANGE.step);
+
+  const lenNote = doc.createElement('div');
+  lenNote.className = 'note';
+
+  lenBox.appendChild(lenTop);
+  lenBox.appendChild(lenInput);
+  lenBox.appendChild(lenNote);
+  wrap.appendChild(lenBox);
+
+
+  /* 语言用国旗选，比滑块直观 */
+  /* 语言一变，滑块标题与预览要立刻跟着换；picker 自己不重建 */
+  const langPicker = createLanguagePicker({
+    doc,
+    onChange: (key, value) => {
+      paint(false);
+      onChange(key, value);
+    },
+  });
+  wrap.appendChild(langPicker.el);
+
+  const preview = doc.createElement('div');
+  preview.className = 'knest-set-preview';
+  preview.innerHTML = '<b>对齐</b><span class="knest-prev-body"></span>';
+  wrap.appendChild(preview);
+
+  /**
+   * 让预览正文跟着字数变。
+   * @param {number} n - 字数。
+   * @returns {void}
+   */
+  const paintPreview = (n) => {
+    const body = preview.querySelector('.knest-prev-body');
+    if (!body) return;
+    const take = Math.max(10, Math.min(FULL_TEXT.length, n));
+    body.textContent = FULL_TEXT.slice(0, take) + (take < FULL_TEXT.length ? '…' : '');
+  };
+
+  /**
+   * 把 prefs 画到控件上。
+   * @param {boolean} [bump] - 是否播一次数字回弹。
+   * @returns {void}
+   */
+  const paint = (bump) => {
+    for (const h of [skinH, sizeH]) {
+      /* 标题每次重画：切语言后要跟着变 */
+      h.nm.textContent = t(h.row.name);
+      const idx = Math.max(0, h.row.list.findIndex((item) => item.id === prefs[h.row.key]));
+      const item = h.row.list[idx] ?? h.row.list[0];
+      h.input.value = String(idx);
+      const pct = h.row.list.length > 1 ? (idx / (h.row.list.length - 1)) * 100 : 0;
+      h.input.style.setProperty('--fill', `${pct}%`);
+      h.vl.textContent = t(item.label);
+      h.note.textContent = t(h.row.note(item) ?? '');
+    }
+
+    lenNm.textContent = t('解释长度');
+    const n = prefs.charLimit;
+    lenInput.value = String(n);
+    const pct = ((n - CHAR_RANGE.min) / (CHAR_RANGE.max - CHAR_RANGE.min)) * 100;
+    lenInput.style.setProperty('--fill', `${pct}%`);
+    lenVl.textContent = `${n} · ${t(depthLabel(n))}`;
+    lenNote.textContent = t('往左更短，往右更详细');
+    paintPreview(n);
+
+    if (bump) {
+      lenVl.classList.remove('knest-bump');
+      void lenVl.offsetWidth;
+      lenVl.classList.add('knest-bump');
+    }
+
+    applyPrefs(prefs);
+    langPicker?.refresh?.();
+  };
+
+  for (const h of [skinH, sizeH]) {
+    h.input.addEventListener('input', () => {
+      const item = h.row.list[Number(h.input.value)];
+      if (item === undefined) return;
+      prefs = writePrefs({ [h.row.key]: item.id });
+      paint(false);
+      onChange(h.row.key, item.id);
+    });
+  }
+
+  /* 拖动中实时跟手（不写盘），松手才存 */
+  lenInput.addEventListener('input', () => {
+    const n = Number(lenInput.value);
+    const pct = ((n - CHAR_RANGE.min) / (CHAR_RANGE.max - CHAR_RANGE.min)) * 100;
+    lenInput.style.setProperty('--fill', `${pct}%`);
+    lenVl.textContent = `${n} · ${t(depthLabel(n))}`;
+    paintPreview(n);
+  });
+  lenInput.addEventListener('change', () => {
+    prefs = writePrefs({ charLimit: Number(lenInput.value) });
+    paint(true);
+    onChange('charLimit', prefs.charLimit);
+  });
+
+  paint(false);
+
+  return {
+    el: wrap,
+    /**
+     * 外部改了偏好时同步一次。
+     * @returns {void}
+     */
+    refresh: () => {
+      prefs = readPrefs();
+      paint(false);
+    },
+  };
 }
 
 
@@ -3591,19 +5666,20 @@ function createSettings(options = {}) {
   root.setAttribute('data-open', 'false');
   root.innerHTML = `
     <div class="knest-set-head">
-      <b>词林 · 设置</b>
-      <button class="knest-set-x" type="button" title="关闭">×</button>
+      <b data-i18n="词林 · 设置">词林 · 设置</b>
+      <button class="knest-set-x" type="button" title="${t('关闭')}">×</button>
     </div>
-    <div class="knest-set-status">正在读取…</div>
+    <div class="knest-set-status" data-i18n="正在读取…">正在读取…</div>
+    <div class="knest-set-look"></div>
     <div class="knest-set-presets"></div>
     <div class="knest-set-fields">
-      <label>接口地址<input class="knest-set-url" spellcheck="false" placeholder="https://api.deepseek.com"></label>
-      <label>模型名<input class="knest-set-model" spellcheck="false" placeholder="deepseek-flash"></label>
-      <label class="knest-set-key-row">钥匙<input class="knest-set-key" type="password" spellcheck="false" placeholder="sk-..."></label>
+      <label><span data-i18n="接口地址">接口地址</span><input class="knest-set-url" spellcheck="false" placeholder="https://api.deepseek.com"></label>
+      <label><span data-i18n="模型名">模型名</span><input class="knest-set-model" spellcheck="false" placeholder="deepseek-flash"></label>
+      <label class="knest-set-key-row"><span data-i18n="钥匙">钥匙</span><input class="knest-set-key" type="password" spellcheck="false" placeholder="sk-..."></label>
     </div>
     <div class="knest-set-actions">
-      <button class="knest-set-save" type="button">保存并测试</button>
-      <button class="knest-set-test" type="button">只测试</button>
+      <button class="knest-set-save" type="button" data-i18n="保存并测试">保存并测试</button>
+      <button class="knest-set-test" type="button" data-i18n="只测试">只测试</button>
     </div>
     <div class="knest-set-msg" data-kind=""></div>
   `;
@@ -3611,6 +5687,17 @@ function createSettings(options = {}) {
 
   const $ = (selector) => root.querySelector(selector);
   const statusEl = $('.knest-set-status');
+
+  /* 外观三个滑块：只改本地偏好，不碰模型配置 */
+  const lookHost = $('.knest-set-look');
+  const appearance = createAppearanceSection({ doc, onChange: () => {} });
+  if (lookHost) {
+    lookHost.appendChild(appearance.el);
+    const lab = doc.createElement('div');
+    lab.className = 'knest-set-path';
+    lab.textContent = t('下面的模型配置和上面这些互不影响');
+    lookHost.appendChild(lab);
+  }
   const presetsEl = $('.knest-set-presets');
   const msgEl = $('.knest-set-msg');
 
@@ -3620,6 +5707,17 @@ function createSettings(options = {}) {
    * @param {string} text - 文案。
    * @returns {void}
    */
+  /**
+   * 把所有带 data-i18n 的节点按当前语言重写。
+   * 切语言时调它，不重建 DOM，用户正在填的输入不会丢。
+   * @returns {void}
+   */
+  const retranslate = () => {
+    for (const el of root.querySelectorAll('[data-i18n]')) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    }
+  };
+
   const say = (kind, text) => {
     msgEl.dataset.kind = kind;
     msgEl.textContent = text;
@@ -3635,9 +5733,9 @@ function createSettings(options = {}) {
     state = next;
     const eff = next.effective ?? {};
     statusEl.innerHTML = ''
-      + `<div>当前生效 <b>${escapeHtml(eff.baseUrl || '（未配置）')}</b></div>`
-      + `<div>模型 <b>${escapeHtml(eff.model || '（无）')}</b>　钥匙 ${escapeHtml(eff.keyMasked || '（无）')}</div>`
-      + `<div class="knest-set-path">配置目录 ${escapeHtml(next.home ?? '')}</div>`;
+      + `<div>${t('当前生效')} <b>${escapeHtml(eff.baseUrl || t('（未配置）'))}</b></div>`
+      + `<div>${t('模型')} <b>${escapeHtml(eff.model || t('（无）'))}</b>　${t('钥匙')} ${escapeHtml(eff.keyMasked || t('（无）'))}</div>`
+      + `<div class="knest-set-path">${t('配置目录')} ${escapeHtml(next.home ?? '')}</div>`;
   };
 
   /**
@@ -3670,7 +5768,7 @@ function createSettings(options = {}) {
     keyRow.dataset.optional = preset.needsKey === false ? '1' : '0';
     const savedKey = state?.saved?.apiKeyMasked ?? '';
     if (preset.needsKey === false) {
-      $('.knest-set-key').placeholder = '不用填';
+      $('.knest-set-key').placeholder = t('不用填');
     } else if (savedKey !== '') {
       /* 已经存过：告诉用户留空就沿用，别让他以为丢了 */
       $('.knest-set-key').placeholder = `已保存 ${savedKey}，留空则沿用`;
@@ -3727,7 +5825,7 @@ function createSettings(options = {}) {
       }
       say('', '');
     } catch (error) {
-      statusEl.innerHTML = '<div>读不到配置服务</div>';
+      statusEl.innerHTML = `<div>${t('读不到配置服务')}</div>`;
       say('bad', `配置服务没响应（${base}）。请确认 MCP server 正在运行。`);
     }
   }
@@ -3738,11 +5836,11 @@ function createSettings(options = {}) {
   $('.knest-set-save').addEventListener('click', async () => {
     const button = $('.knest-set-save');
     button.disabled = true;
-    say('', '正在保存…');
+    say('', t('正在保存…'));
     try {
       const saved = await call('/save', form());
       if (saved.ok !== true) {
-        say('bad', saved.message ?? '保存失败');
+        say('bad', saved.message ?? t('保存失败'));
         return;
       }
       paintStatus(saved.state);
@@ -3786,6 +5884,7 @@ function createSettings(options = {}) {
    */
   function open() {
     root.setAttribute('data-open', 'true');
+    retranslate();
     refresh();
   }
 
@@ -3820,7 +5919,7 @@ function createSettings(options = {}) {
     root.remove();
   }
 
-  return { open, close, toggle, isOpen, refresh, dispose, el: root };
+  return { open, close, toggle, isOpen, refresh, retranslate, dispose, el: root };
 }
 
 /**
@@ -3871,7 +5970,7 @@ function mountKnest(options = {}) {
   if (doc.getElementById('knest-style') === null) {
     const style = doc.createElement('style');
     style.id = 'knest-style';
-    style.textContent = KNEST_CSS;
+    style.textContent = KNEST_CSS + '\n' + KNEST_SKIN_CSS.join('\n');
     (doc.head ?? doc.documentElement).appendChild(style);
   }
   /* 跟着宿主的明暗走：读页面背景亮度，别硬写 dark */
@@ -4026,6 +6125,9 @@ function mountKnest(options = {}) {
     },
     onExport: () => exportTree(),
   });
+  /* 先把外观偏好打到 html 上，否则第一帧是默认皮肤 */
+  applyPrefs();
+
   board.mount();
 
   const annotator = createAnnotator({ doc, win });
@@ -4039,11 +6141,25 @@ function mountKnest(options = {}) {
     port: setupPort,
     onToast: (message) => flash(message),
   });
+  /* 语言一变就把面板文案重写一遍 */
+  const onPrefsChange = () => {
+    try { settings.retranslate?.(); } catch {}
+    try { paintLangBadge(); } catch {}
+  };
+  win.addEventListener?.('knest-prefs', onPrefsChange);
+
   const gear = doc.createElement('button');
   gear.type = 'button';
-  gear.className = 'knest-edge-tab';
-  gear.title = '词林：点这里选模型、填钥匙';
-  gear.innerHTML = '<span>词林</span>';
+  gear.className = 'knest-logo-btn';
+  gear.title = '词林 · 外观、长度、语言都在这里';
+  gear.innerHTML = '<span class="g">词</span><span>词林</span><span class="knest-fab-lang"></span>';
+
+  /* 当前语言挂在按钮上：出问题时一眼看出是代码没生效还是逻辑有问题 */
+  const langBadge = gear.querySelector('.knest-fab-lang');
+  const paintLangBadge = () => {
+    if (langBadge) langBadge.textContent = readPrefs().lang;
+  };
+  paintLangBadge();
   gear.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
