@@ -15,7 +15,7 @@ import { MODE_VALUES, TOOL_NAME, runExplainTool } from './explain-tool.js';
 import { createModelProvider, resolveModel } from './model.js';
 
 /** 版本号（与 package.json 保持一致，免得客户端缓存对不上）。 */
-export const SERVER_VERSION = '0.1.0';
+export const SERVER_VERSION = '0.2.0';
 
 /** 服务名。 */
 export const SERVER_NAME = 'knowledge-nest';
@@ -90,12 +90,17 @@ export function createKnestServer(options = {}) {
   server.registerTool(
     TOOL_NAME,
     {
-      title: 'Explain a phrase inside a conversation',
+      title: '解释对话里的词 / Explain a phrase in conversation',
       description:
-        'Explain what a word or sentence means **inside the given conversation** (not a dictionary definition). '
-        + 'Feed it the text the user circled plus the surrounding conversation; it returns a structured card: '
-        + 'contextual meaning, evidence quotes, alternative readings, related concepts and a confidence level. '
-        + 'Modes: explain (default), rephrase (plain language), example (concrete case), translate (zh<->en).',
+        '解释一个词或一句话在给定对话里的意思，而不是词典义。'
+        + '把用户圈出的文字和前后对话一起传进来，它返回一张结构化卡片：语境释义、依据引用、其他读法、相关概念、置信度。'
+        + '何时用它：用户问“这个词在这里是什么意思”“这句话怎么理解”“换个说法”“举个例子”“翻译一下”，'
+        + '而上下文明显示意偏向某个专业或私人语境时。'
+        + '何时不用：查字典式的通用释义、需要联网查资料、需要改写整篇文章。'
+        + '四种模式：explain 语境释义（默认）/ rephrase 换个说法 / example 举个例子 / translate 翻译（中英互译）。'
+        + 'English: explain what a word or sentence means inside the given conversation, '
+        + 'returning contextual meaning, evidence quotes, alternative readings, related concepts and a confidence level. '
+        + 'Modes: explain (default), rephrase, example, translate.',
       inputSchema: {
         text: z.string().min(1).describe('圈出来的词或句子（纯文本，≤200 字）'),
         context: z.string().optional().describe('前后几条对话拼成的纯文本，越贴近原文越好（≤8000 字）'),
