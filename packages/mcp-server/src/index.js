@@ -12,6 +12,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createKnestServer } from './server.js';
 import { SERVER_NAME, SERVER_VERSION } from './server.js';
 import { knestHome, startupDiagnostics } from './model.js';
+import { startSetupServer } from './setup.js';
 
 const argv = process.argv.slice(2);
 
@@ -66,4 +67,27 @@ for (const line of diag.lines) {
 }
 for (const warning of diag.warnings) {
   console.error(`[knowledge-nest] 注意：${warning}`);
+}
+
+/* 配置页：给没有 UI 的客户端补一个能填钥匙的入口。
+ * 起不来（端口占用等）不影响 MCP 本身，只是少了个界面。 */
+if (process.env.KNEST_NO_SETUP !== '1') {
+  try {
+    const setup = await startSetupServer({ env: process.env });
+    if (setup !== null) {
+      process.env.KNEST_SETUP_URL = setup.url;
+      console.error(`[knowledge-nest] 配置页：${setup.url}`);
+      console.error('[knowledge-nest] 打开上面这个地址就能填钥匙、选本机模型、当场测通');
+      const shutdown = () => {
+        setup.close().finally(() => process.exit(0));
+      };
+      process.once('exit', () => {
+        setup.close();
+      });
+      process.once('SIGINT', shutdown);
+      process.once('SIGTERM', shutdown);
+    }
+  } catch (error) {
+    console.error(`[knowledge-nest] 配置页没起来：${String(error?.message ?? error).slice(0, 120)}`);
+  }
 }
