@@ -53,6 +53,61 @@ export function knestHome(env = process.env) {
 }
 
 /**
+ * 这个路径是不是落在 Windows 的系统盘（通常是 C:）。
+ *
+ * 只用来发提醒，不改变行为：有的机器（尤其本机）明令禁止往 C 盘写，
+ * 而默认的 `~/.knest` 恰好就在 C 盘。让客户端日志里能一眼看到这件事。
+ *
+ * @param {string} path - 绝对路径。
+ * @returns {boolean} 是否在系统盘。
+ */
+export function isOnSystemDrive(path) {
+  const text = typeof path === 'string' ? path.trim() : '';
+  if (text === '') return false;
+  const drive = process.env.SystemDrive || 'C:';
+  return text.slice(0, 2).toUpperCase() === `${drive.slice(0, 2).toUpperCase()}`;
+}
+
+/**
+ * 启动自检：把「配置从哪来、能不能用、有没有踩坑」整理成几行字。
+ *
+ * 只读，不写文件、不发请求；调用方负责打到 stderr。
+ *
+ * @param {Record<string,string|undefined>} [env] - 环境变量。
+ * @returns {{lines:string[], warnings:string[], model:object}} 诊断结果。
+ */
+export function startupDiagnostics(env = process.env) {
+  const model = resolveModel(env);
+  const home = knestHome(env);
+  const explicitHome = typeof env?.KNEST_HOME === 'string' && env.KNEST_HOME.trim() !== '';
+  const lines = [
+    `home      ${home}${explicitHome ? '' : '（默认值）'}`,
+    `config    ${configPath(env)}`,
+    `endpoint  ${model.baseUrl || '(未配置)'}`,
+    `model     ${model.model || '(未配置)'}`,
+    `key       ${model.apiKey === '' ? '(无)' : maskKey(model.apiKey)}  来源 ${model.source}`,
+    `timeout   ${model.timeoutMs}ms   maxTokens ${model.maxTokens}`,
+  ];
+
+  const warnings = [];
+  if (!explicitHome && isOnSystemDrive(home)) {
+    warnings.push(
+      `数据目录落在系统盘（${home}）。若这台机器不允许写 C 盘，请在客户端配置里设 KNEST_HOME 到别的盘。`,
+    );
+  }
+  if (model.source === 'none') {
+    warnings.push('没有找到任何钥匙：设 DEEPSEEK_API_KEY 或 OPENAI_API_KEY，或写进 config.json 的 apiKey。');
+  }
+  if (model.model === '') {
+    warnings.push('没有模型名：非 DeepSeek 端点必须显式给 OPENAI_MODEL。');
+  }
+  if (isLocalEndpoint(model.baseUrl) && model.source === 'none') {
+    warnings.push('本地端点不需要钥匙，但需要模型名与已经跑起来的推理服务。');
+  }
+  return { lines, warnings, model };
+}
+
+/**
  * 配置文件路径。
  * @param {Record<string,string|undefined>} [env] - 环境变量。
  * @returns {string} 路径。
