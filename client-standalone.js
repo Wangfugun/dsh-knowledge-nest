@@ -1194,7 +1194,8 @@ function attachSelector(doc, handlers = {}) {
     const end = pointAt(doc, event.clientX, event.clientY);
     const { range } = rangeBetween(doc, startPoint, end);
     try {
-      handlers.onLive?.(range);
+      /* 带上指针坐标：调用方要用它把「已选 N 字」贴到光标旁边 */
+      handlers.onLive?.(range, { x: event.clientX, y: event.clientY });
     } catch {
       /* 忽略 */
     }
@@ -2615,6 +2616,79 @@ function createTreeBoard(options = {}) {
 
     hud = el('div', { class: 'knest-board-hud' }, [exportBtn, reset, clear]);
 
+    /* HUD 可拖动：宿主底部常有自己的工具条，固定位置迟早被挡。
+       拖过之后位置记在 localStorage，下次还在这儿。 */
+    const hudKey = 'knest.hud.pos';
+    const restoreHud = () => {
+      try {
+        const raw = doc?.defaultView?.localStorage?.getItem(hudKey);
+        if (typeof raw !== 'string' || raw === '') return;
+        const pos = JSON.parse(raw);
+        if (Number.isFinite(pos?.left) && Number.isFinite(pos?.top)) {
+          hud.style.left = `${Math.round(pos.left)}px`;
+          hud.style.top = `${Math.round(pos.top)}px`;
+          hud.style.right = 'auto';
+          hud.style.bottom = 'auto';
+        }
+      } catch {
+        /* 忽略 */
+      }
+    };
+    restoreHud();
+
+    let hudDrag = null;
+    const onHudMove = (event) => {
+      if (hudDrag === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const dx = event.clientX - hudDrag.startX;
+      const dy = event.clientY - hudDrag.startY;
+      const box = stage?.getBoundingClientRect?.() ?? { width: 1280, height: 800 };
+      const width = hud.offsetWidth || 90;
+      const height = hud.offsetHeight || 28;
+      const left = Math.min(Math.max(4, hudDrag.originLeft + dx), (Number(box.width) || 1280) - width - 4);
+      const top = Math.min(Math.max(4, hudDrag.originTop + dy), (Number(box.height) || 800) - height - 4);
+      hud.style.left = `${Math.round(left)}px`;
+      hud.style.top = `${Math.round(top)}px`;
+      hud.style.right = 'auto';
+      hud.style.bottom = 'auto';
+    };
+    const onHudUp = (event) => {
+      if (hudDrag === null) return;
+      hudDrag = null;
+      hud.setAttribute('data-dragging', 'false');
+      doc?.removeEventListener?.('pointermove', onHudMove, true);
+      doc?.removeEventListener?.('pointerup', onHudUp, true);
+      try {
+        const box = hud.getBoundingClientRect();
+        const stageBox = stage?.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+        doc?.defaultView?.localStorage?.setItem(hudKey, JSON.stringify({
+          left: box.left - stageBox.left,
+          top: box.top - stageBox.top,
+        }));
+      } catch {
+        /* 忽略 */
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    hud.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      /* 点在按钮上就别拖，留给按钮自己处理 */
+      if (event.target?.closest?.('.knest-hud-btn') !== null) return;
+      const box = hud.getBoundingClientRect();
+      const stageBox = stage?.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+      hudDrag = {
+        startX: event.clientX,
+        startY: event.clientY,
+        originLeft: box.left - stageBox.left,
+        originTop: box.top - stageBox.top,
+      };
+      hud.setAttribute('data-dragging', 'true');
+      doc?.addEventListener?.('pointermove', onHudMove, true);
+      doc?.addEventListener?.('pointerup', onHudUp, true);
+    });
+
     stage = el('div', { class: 'knest-board-main' }, [world, hud]);
     /* 挂载时必须先藏起来：没有这个初始属性，隐藏规则匹配不上，HUD 会一直露在左下角。 */
     root = el('div', { class: 'knest-board', id: 'knest-board', 'data-open': 'false' }, [stage]);
@@ -2642,6 +2716,9 @@ function createTreeBoard(options = {}) {
   };
 
 
+  /** 待执行的那一帧；null 表示当前帧没人排队。 */
+  let dragFrame = null;
+
   function startNodeDrag(event, id) {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -2649,6 +2726,7 @@ function createTreeBoard(options = {}) {
     const node = get(id);
     if (node === null) return;
     const group = selected.has(id) && selected.size > 1 ? [...selected] : [id];
+    const stageTop = (stage ?? root)?.getBoundingClientRect?.()?.top ?? 0;
     drag = {
       kind: 'node',
       id,
@@ -2656,8 +2734,11 @@ function createTreeBoard(options = {}) {
       origins: group.map((item) => ({ id: item, x: get(item)?.x ?? 0, y: get(item)?.y ?? 0 })),
       startX: event.clientX,
       startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
       originX: node.x,
       originY: node.y,
+      minScreenY: stageTop + 80,
     };
     root?.setAttribute('data-dragging', 'true');
     doc?.addEventListener?.('pointermove', onPointerMove, true);
@@ -2677,7 +2758,7 @@ function createTreeBoard(options = {}) {
     const alt = event.altKey === true;
     const middle = event.button === 1;
     if (!alt && !middle) return;
-    drag = { kind: 'pan', startX: event.clientX, startY: event.clientY, originX: panX, originY: panY };
+    drag = { kind: 'pan', startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, originX: panX, originY: panY, minScreenY: null };
     root.setAttribute('data-dragging', 'true');
     doc?.addEventListener?.('pointermove', onPointerMove, true);
     doc?.addEventListener?.('pointerup', onPointerUp, true);
@@ -2686,38 +2767,64 @@ function createTreeBoard(options = {}) {
 
   function onPointerMove(event) {
     if (drag === null) return;
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
+    /* 只记住最新位置，真正的计算丢到下一帧做。
+       原来的写法是每个 pointermove 都全量算一遍，高刷鼠标一秒能触发一百多次，
+       再叠上 syncEdges 被调用两次，就成了肉眼可见的一顿一顿。 */
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    if (dragFrame !== null) return;
+    dragFrame = (doc?.defaultView?.requestAnimationFrame ?? ((fn) => setTimeout(fn, 16)))(() => {
+      dragFrame = null;
+      applyDragFrame();
+    });
+  }
+
+  /**
+   * 按最新指针位置重排卡片。一帧只跑一次。
+   * @returns {void}
+   */
+  function applyDragFrame() {
+    if (drag === null) return;
+    const dx = drag.lastX - drag.startX;
+    const dy = drag.lastY - drag.startY;
+
     if (drag.kind === 'pan') {
       panX = drag.originX + dx;
       panY = drag.originY + dy;
       applyView();
       return;
     }
+
     const node = get(drag.id);
     if (node === null) return;
-    const snap = (value) => (event.altKey === true ? Math.round(value) : Math.round(value / 12) * 12);
+
     const stepX = dx / scale;
     const stepY = dy / scale;
+    /* 顶部禁区的世界坐标下界，拖动开始时就算好，不必每帧重新量 DOM */
+    const minWorldY = drag.minScreenY === null ? null : (drag.minScreenY - panY) / scale;
+
     for (const origin of drag.origins ?? [{ id: drag.id, x: drag.originX, y: drag.originY }]) {
       const target = get(origin.id);
       if (target === null) continue;
-      target.x = snap(origin.x + stepX);
-      target.y = snap(origin.y + stepY);
+      /* 不再磁吸：以前按 12px 取整，拖起来是跳格的。现在跟手就是一像素一像素走。 */
+      let nextX = origin.x + stepX;
+      let nextY = origin.y + stepY;
+      if (minWorldY !== null && nextY < minWorldY) nextY = minWorldY;
+      target.x = nextX;
+      target.y = nextY;
       positionNode(target);
     }
-    syncEdges();
-    /* 顶部禁区：世界坐标下 titlebar 不得高于 TOP_GUARD */
-    const stageTop = (stage ?? root)?.getBoundingClientRect?.()?.top ?? 0;
-    const minScreenY = stageTop + 80;
-    const screenY = node.y * scale + panY;
-    if (screenY < minScreenY) node.y = Math.round((minScreenY - panY) / scale);
-    positionNode(node);
+    /* 全组位置都定了再连一次线；原来是边改边连、还连了两遍 */
     syncEdges();
   }
 
   function onPointerUp() {
     if (drag === null) return;
+    if (dragFrame !== null) {
+      (doc?.defaultView?.cancelAnimationFrame ?? clearTimeout)(dragFrame);
+      dragFrame = null;
+      applyDragFrame();
+    }
     const draggedId = drag.kind === 'node' ? drag.id : null;
     drag = null;
     if (draggedId !== null) {
@@ -3240,6 +3347,45 @@ const KNEST_CSS = [
   '#knest-switch{position:fixed;right:44px;top:22%;z-index:2147482999;pointer-events:auto}',
   '.knest-toast{position:fixed;right:56px;top:calc(38% - 8px);max-width:min(340px,60vw);padding:7px 11px;background:var(--kn-panel);border:1px solid var(--kn-rule);box-shadow:var(--kn-shadow);color:var(--kn-ink);font-size:12px;line-height:1.55;overflow-wrap:anywhere;pointer-events:none;z-index:2147483007;opacity:0;transform:translateX(6px);transition:opacity .16s ease,transform .16s ease}',
   '.knest-toast[data-show="true"]{opacity:1;transform:none}',
+  /* 拖动时的字数提示：贴在指针旁，告诉用户已经选中多少字 */
+  '.knest-drag-hint{position:fixed;z-index:2147483006;padding:4px 9px;border-radius:999px;border:1px solid var(--kn-echo);background:var(--kn-panel);color:var(--kn-echo);font-size:11px;line-height:1.5;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.28);opacity:0;transform:translateY(-3px);transition:opacity .12s ease,transform .12s ease}',
+  '.knest-drag-hint[data-show="true"]{opacity:1;transform:none}',
+  /* 设置面板：注入到宿主页面里的配置浮层 */
+  '.knest-gear{position:fixed;right:18px;bottom:18px;z-index:2147483005;width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid var(--kn-rule);background:var(--kn-panel);color:var(--kn-mute);font-size:15px;line-height:1;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.28);transition:color .15s ease,border-color .15s ease,transform .15s ease}',
+  '.knest-gear:hover{color:var(--kn-ink);border-color:var(--kn-echo);transform:rotate(35deg)}',
+  /* 右侧竖条入口：贴在窗口右边缘，比角落小圆点显眼得多 */
+  '.knest-edge-tab{position:fixed;right:2px;top:34%;z-index:2147483005;display:flex;align-items:center;justify-content:center;padding:18px 8px;border:1px solid var(--kn-echo);border-right:0;border-radius:11px 0 0 11px;background:color-mix(in srgb,var(--kn-echo) 14%,var(--kn-panel));color:var(--kn-echo);cursor:pointer;font:inherit;box-shadow:-2px 0 16px rgba(0,0,0,.28);transition:padding .18s ease,background .18s ease}',
+  '.knest-edge-tab:hover{padding-right:14px;background:color-mix(in srgb,var(--kn-echo) 24%,var(--kn-panel))}',
+  '.knest-edge-tab[data-open="true"]{color:var(--kn-echo);border-color:var(--kn-echo)}',
+  '.knest-edge-tab span{display:block;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:.26em;font-size:11.5px;line-height:1;white-space:nowrap}',
+  '.knest-edge-tab[data-alert="1"]::after{content:"";position:absolute;top:8px;right:7px;width:7px;height:7px;border-radius:50%;background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.22);animation:knest-pulse 1.8s ease-in-out infinite}',
+  '@keyframes knest-pulse{0%,100%{opacity:1}50%{opacity:.35}}',
+  '.knest-settings{position:fixed;right:18px;bottom:62px;width:352px;max-height:calc(100vh - 110px);overflow:auto;z-index:2147483004;background:var(--kn-panel);border:1px solid var(--kn-rule);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.42);color:var(--kn-ink);font-size:12.5px;line-height:1.6;padding:14px 16px 16px;display:none}',
+  '.knest-settings[data-open="true"]{display:block}',
+  '.knest-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}',
+  '.knest-set-head b{font-size:13px;font-weight:600}',
+  '.knest-set-x{background:transparent;border:0;color:var(--kn-mute);font-size:17px;line-height:1;cursor:pointer;padding:2px 4px}',
+  '.knest-set-x:hover{color:var(--kn-ink)}',
+  '.knest-set-status{background:rgba(127,127,127,.08);border:1px solid var(--kn-rule);border-radius:8px;padding:8px 10px;margin-bottom:12px;font-size:11.5px}',
+  '.knest-set-status b{color:var(--kn-echo);font-weight:500}',
+  '.knest-set-path{color:var(--kn-mute);font-size:10.5px;overflow-wrap:anywhere;margin-top:4px}',
+  '.knest-set-presets{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:12px}',
+  '.knest-set-presets button{text-align:left;background:transparent;border:1px solid var(--kn-rule);border-radius:8px;padding:7px 9px;cursor:pointer;color:var(--kn-ink);font:inherit;transition:border-color .15s ease}',
+  '.knest-set-presets button:hover{border-color:var(--kn-echo)}',
+  '.knest-set-presets button[data-on="1"]{border-color:var(--kn-echo);background:var(--kn-echo-soft)}',
+  '.knest-set-presets b{display:block;font-size:12px;font-weight:600;margin-bottom:1px}',
+  '.knest-set-presets span{display:block;color:var(--kn-mute);font-size:10.5px;line-height:1.45}',
+  '.knest-set-fields label{display:block;margin-bottom:9px;color:var(--kn-mute);font-size:11px}',
+  '.knest-set-fields input{width:100%;margin-top:3px;background:rgba(0,0,0,.22);border:1px solid var(--kn-rule);border-radius:7px;color:var(--kn-ink);padding:6px 8px;font:inherit;font-size:12px;outline:none}',
+  '.knest-set-fields input:focus{border-color:var(--kn-echo)}',
+  '.knest-set-key-row[data-optional="1"]{opacity:.6}',
+  '.knest-set-actions{display:flex;gap:8px;margin-top:4px}',
+  '.knest-set-actions button{flex:1;border-radius:8px;padding:7px 10px;font:inherit;font-size:12px;cursor:pointer;border:1px solid var(--kn-rule);background:transparent;color:var(--kn-ink)}',
+  '.knest-set-actions button.knest-set-save{background:var(--kn-echo);border-color:var(--kn-echo);color:#08130d;font-weight:600}',
+  '.knest-set-actions button:disabled{opacity:.5;cursor:default}',
+  '.knest-set-msg{margin-top:10px;font-size:11.5px;white-space:pre-wrap;word-break:break-all;display:none}',
+  '.knest-set-msg[data-kind="ok"]{display:block;color:var(--kn-echo)}',
+  '.knest-set-msg[data-kind="bad"]{display:block;color:#ff6b6b}',
   '.knest-switch-btn{display:flex;flex-direction:column;align-items:center;gap:9px;padding:13px 4px;background:var(--kn-panel);color:var(--kn-mute);border:1px solid var(--kn-rule);border-radius:0;cursor:pointer;font:inherit;transition:transform .16s ease,color .16s ease,border-color .16s ease}',
   '.knest-switch-btn:hover{transform:translateX(-3px);color:var(--kn-ink);border-color:var(--kn-signal)}',
   '.knest-switch-btn:focus-visible{outline:1px solid var(--kn-signal);outline-offset:-3px}',
@@ -3356,8 +3502,10 @@ const KNEST_CSS = [
   '.knest-chip:hover:not(:disabled){background:var(--kn-echo-soft);border-color:var(--kn-echo)}',
   '.knest-chip:disabled{color:var(--kn-mute);opacity:.55;cursor:default}',
   '.knest-tnode-foot{margin-top:8px;font-size:10.5px;color:var(--kn-mute);font-variant-numeric:tabular-nums}',
-  '.knest-board-hud{position:absolute;left:16px;bottom:16px;top:auto;right:auto;display:flex;align-items:center;gap:2px;padding:3px;pointer-events:auto;background:color-mix(in srgb,var(--kn-panel) 88%,transparent);border:1px solid var(--kn-rule);box-shadow:var(--kn-shadow);opacity:.72;transition:opacity .14s ease}',
+  '.knest-board-hud{position:absolute;right:16px;bottom:16px;top:auto;left:auto;display:flex;align-items:center;gap:2px;padding:3px;pointer-events:auto;background:color-mix(in srgb,var(--kn-panel) 92%,transparent);border:1px solid var(--kn-rule);box-shadow:var(--kn-shadow);opacity:.72;transition:opacity .14s ease;cursor:grab;user-select:none;touch-action:none}',
   '.knest-board-hud:hover{opacity:1}',
+  '.knest-board-hud[data-dragging="true"]{cursor:grabbing;opacity:1}',
+  '.knest-board-hud .knest-hud-btn{cursor:pointer}',
   '.knest-hud-btn{width:24px;height:24px;border:0;background:none;color:var(--kn-mute);font:14px/1 ui-sans-serif,system-ui;cursor:pointer;padding:0;border-radius:4px}',
   '.knest-hud-btn:hover{color:var(--kn-ink);background:var(--kn-echo-soft)}',
 
@@ -3407,6 +3555,288 @@ function ensureStyles(doc) {
 }
 
 
+/* ===== client/settings.js ===== */
+/**
+ * 设置面板：直接建在宿主页面里（Cherry Studio 注入版用）。
+ *
+ * 它不自己保存配置，而是把表单 POST 给本机运行的配置服务（MCP server 起的那个），
+ * 由服务写进 config.json —— 这样界面和实际读取配置的地方永远是同一份。
+ *
+ * 为什么能用：配置服务只监听 127.0.0.1，并且允许来自 file:// 页面（Origin: null）的请求，
+ * 注入进来的界面正好是这种来源；外部网页的 Origin 是域名，会被拒。
+ */
+
+/** 面板的 class 前缀。 */
+const PREFIX = 'knest-set';
+
+/**
+ * 造一个设置面板。
+ *
+ * @param {{doc?:Document, win?:object, port?:number, onSaved?:Function, onToast?:Function}} [options] - 配置。
+ * @returns {{open:Function, close:Function, toggle:Function, isOpen:Function, refresh:Function, dispose:Function, el:HTMLElement}} 句柄。
+ */
+function createSettings(options = {}) {
+  const win = options.win ?? globalThis;
+  const doc = options.doc ?? win.document;
+  const port = Number(options.port ?? 7332);
+  const base = `http://127.0.0.1:${port}`;
+  const toast = typeof options.onToast === 'function' ? options.onToast : () => {};
+
+  let presets = [];
+  let picked = 'deepseek';
+  let state = null;
+
+  const root = doc.createElement('div');
+  root.className = 'knest-settings';
+  root.setAttribute('data-open', 'false');
+  root.innerHTML = `
+    <div class="knest-set-head">
+      <b>词林 · 设置</b>
+      <button class="knest-set-x" type="button" title="关闭">×</button>
+    </div>
+    <div class="knest-set-status">正在读取…</div>
+    <div class="knest-set-presets"></div>
+    <div class="knest-set-fields">
+      <label>接口地址<input class="knest-set-url" spellcheck="false" placeholder="https://api.deepseek.com"></label>
+      <label>模型名<input class="knest-set-model" spellcheck="false" placeholder="deepseek-flash"></label>
+      <label class="knest-set-key-row">钥匙<input class="knest-set-key" type="password" spellcheck="false" placeholder="sk-..."></label>
+    </div>
+    <div class="knest-set-actions">
+      <button class="knest-set-save" type="button">保存并测试</button>
+      <button class="knest-set-test" type="button">只测试</button>
+    </div>
+    <div class="knest-set-msg" data-kind=""></div>
+  `;
+  (doc.body ?? doc.documentElement).appendChild(root);
+
+  const $ = (selector) => root.querySelector(selector);
+  const statusEl = $('.knest-set-status');
+  const presetsEl = $('.knest-set-presets');
+  const msgEl = $('.knest-set-msg');
+
+  /**
+   * 写一条结果提示。
+   * @param {string} kind - ok / bad / ''。
+   * @param {string} text - 文案。
+   * @returns {void}
+   */
+  const say = (kind, text) => {
+    msgEl.dataset.kind = kind;
+    msgEl.textContent = text;
+  };
+
+  /**
+   * 画状态区。
+   * @param {object} next - 服务返回的状态。
+   * @returns {void}
+   */
+  const paintStatus = (next) => {
+    if (next === null || next === undefined) return;
+    state = next;
+    const eff = next.effective ?? {};
+    statusEl.innerHTML = ''
+      + `<div>当前生效 <b>${escapeHtml(eff.baseUrl || '（未配置）')}</b></div>`
+      + `<div>模型 <b>${escapeHtml(eff.model || '（无）')}</b>　钥匙 ${escapeHtml(eff.keyMasked || '（无）')}</div>`
+      + `<div class="knest-set-path">配置目录 ${escapeHtml(next.home ?? '')}</div>`;
+  };
+
+  /**
+   * 画预设按钮。
+   * @returns {void}
+   */
+  const paintPresets = () => {
+    presetsEl.innerHTML = presets.map((item) => (
+      `<button type="button" data-id="${escapeHtml(item.id)}" data-on="${item.id === picked ? '1' : '0'}">`
+      + `<b>${escapeHtml(item.label)}</b><span>${escapeHtml(item.hint)}</span></button>`
+    )).join('');
+    for (const button of presetsEl.querySelectorAll('button')) {
+      button.addEventListener('click', () => pick(button.dataset.id));
+    }
+  };
+
+  /**
+   * 选一个预设，顺带把默认值填进表单。
+   * @param {string} id - 预设 id。
+   * @returns {void}
+   */
+  const pick = (id) => {
+    picked = id;
+    const preset = presets.find((item) => item.id === id);
+    if (preset === undefined) return;
+    paintPresets();
+    $('.knest-set-url').value = preset.baseUrl || '';
+    $('.knest-set-model').value = preset.model || (state?.saved?.model ?? '');
+    const keyRow = $('.knest-set-key-row');
+    keyRow.dataset.optional = preset.needsKey === false ? '1' : '0';
+    const savedKey = state?.saved?.apiKeyMasked ?? '';
+    if (preset.needsKey === false) {
+      $('.knest-set-key').placeholder = '不用填';
+    } else if (savedKey !== '') {
+      /* 已经存过：告诉用户留空就沿用，别让他以为丢了 */
+      $('.knest-set-key').placeholder = `已保存 ${savedKey}，留空则沿用`;
+    } else {
+      $('.knest-set-key').placeholder = 'sk-...';
+    }
+    say('', '');
+  };
+
+  /**
+   * 读表单。
+   * @returns {object} 载荷。
+   */
+  const form = () => ({
+    preset: picked,
+    baseUrl: $('.knest-set-url').value,
+    model: $('.knest-set-model').value,
+    apiKey: $('.knest-set-key').value,
+  });
+
+  /**
+   * 调服务。
+   * @param {string} path - /state /save /test。
+   * @param {object} [body] - POST 载荷。
+   * @returns {Promise<object>} 结果。
+   */
+  const call = async (path, body) => {
+    const res = await fetch(`${base}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return res.json();
+  };
+
+  /**
+   * 重新读状态。
+   * @returns {Promise<void>}
+   */
+  async function refresh() {
+    try {
+      const next = await call('/state');
+      presets = Array.isArray(next.presets) ? next.presets : [];
+      paintStatus(next);
+      paintPresets();
+      const savedUrl = next?.saved?.baseUrl ?? '';
+      if (savedUrl !== '') {
+        const guess = presets.find((item) => item.baseUrl && savedUrl.startsWith(item.baseUrl.replace(/\/v1$/u, '')));
+        pick(guess?.id ?? 'custom');
+        $('.knest-set-url').value = savedUrl;
+        $('.knest-set-model').value = next?.saved?.model ?? '';
+      } else {
+        pick('deepseek');
+      }
+      say('', '');
+    } catch (error) {
+      statusEl.innerHTML = '<div>读不到配置服务</div>';
+      say('bad', `配置服务没响应（${base}）。请确认 MCP server 正在运行。`);
+    }
+  }
+
+  /* 事件 */
+  $('.knest-set-x').addEventListener('click', () => close());
+
+  $('.knest-set-save').addEventListener('click', async () => {
+    const button = $('.knest-set-save');
+    button.disabled = true;
+    say('', '正在保存…');
+    try {
+      const saved = await call('/save', form());
+      if (saved.ok !== true) {
+        say('bad', saved.message ?? '保存失败');
+        return;
+      }
+      paintStatus(saved.state);
+      say('ok', `${saved.message}，正在测试…`);
+      const tested = await call('/test', form());
+      say(tested.ok === true ? 'ok' : 'bad',
+        `${tested.ok === true ? '保存成功，测试通过：' : '已保存，但测试没过：'}${tested.message}`
+        + (tested.detail ? `\n${tested.detail}` : ''));
+      if (tested.ok === true) {
+        toast('词林：配置已生效');
+        if (typeof options.onSaved === 'function') options.onSaved(saved.state);
+      }
+    } catch (error) {
+      say('bad', `请求失败：${String(error?.message ?? error).slice(0, 120)}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('.knest-set-test').addEventListener('click', async () => {
+    const button = $('.knest-set-test');
+    button.disabled = true;
+    say('', '正在测试…');
+    try {
+      const tested = await call('/test', form());
+      say(tested.ok === true ? 'ok' : 'bad',
+        tested.message + (tested.detail ? `\n${tested.detail}` : ''));
+    } catch (error) {
+      say('bad', `请求失败：${String(error?.message ?? error).slice(0, 120)}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  root.addEventListener('mousedown', (event) => event.stopPropagation());
+  root.addEventListener('contextmenu', (event) => event.stopPropagation());
+
+  /**
+   * 打开面板。
+   * @returns {void}
+   */
+  function open() {
+    root.setAttribute('data-open', 'true');
+    refresh();
+  }
+
+  /**
+   * 关闭面板。
+   * @returns {void}
+   */
+  function close() {
+    root.setAttribute('data-open', 'false');
+  }
+
+  /**
+   * 开关。
+   * @returns {void}
+   */
+  function toggle() {
+    if (root.getAttribute('data-open') === 'true') close();
+    else open();
+  }
+
+  /**
+   * 是否打开。
+   * @returns {boolean} 状态。
+   */
+  const isOpen = () => root.getAttribute('data-open') === 'true';
+
+  /**
+   * 卸载。
+   * @returns {void}
+   */
+  function dispose() {
+    root.remove();
+  }
+
+  return { open, close, toggle, isOpen, refresh, dispose, el: root };
+}
+
+/**
+ * HTML 转义，避免配置里的尖括号破坏结构。
+ * @param {unknown} value - 原值。
+ * @returns {string} 安全字符串。
+ */
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;');
+}
+
+
 /* ===== client/standalone.js ===== */
 /**
  * 独立外壳：不依赖 React、不依赖 DSH 插槽，把一个「圈词」界面挂到任何网页或 Electron 窗口里。
@@ -3452,6 +3882,56 @@ function mountKnest(options = {}) {
 
   const painter = createPainter(doc);
   let flashToast = null;
+
+  /* 拖动时的字数提示。
+     右键拖动时浏览器不产生原生选区，光靠高亮很难判断拖了多长，
+     所以在指针旁边挂一个小气泡，实时报「已选 N 字」。 */
+  let dragHint = null;
+  const hideDragHint = () => {
+    try {
+      dragHint?.setAttribute('data-show', 'false');
+    } catch {
+      /* 忽略 */
+    }
+  };
+
+  /**
+   * 更新拖动提示。
+   * @param {Range|null} range - 当前选区。
+   * @param {number} [x] - 指针横坐标。
+   * @param {number} [y] - 指针纵坐标。
+   * @returns {void}
+   */
+  const showDragHint = (range, x, y) => {
+    try {
+      const count = range === null || range === undefined ? 0 : [...String(range.toString()).replace(/\s+/gu, '')].length;
+      if (count === 0) {
+        hideDragHint();
+        return;
+      }
+      if (dragHint === null || dragHint.parentNode === null) {
+        dragHint = doc.createElement('div');
+        dragHint.className = 'knest-drag-hint';
+        dragHint.setAttribute('data-show', 'false');
+        (doc.body ?? doc.documentElement).appendChild(dragHint);
+      }
+      dragHint.textContent = `已选 ${count} 字`;
+      dragHint.setAttribute('data-show', 'true');
+
+      const px = typeof x === 'number' ? x : win.innerWidth / 2;
+      const py = typeof y === 'number' ? y : win.innerHeight / 2;
+      const gap = 16;
+      const boxW = 100;
+      const boxH = 30;
+      const left = px + gap + boxW > win.innerWidth ? px - gap - boxW : px + gap;
+      const top = py + gap + boxH > win.innerHeight ? py - gap - boxH : py + gap;
+      dragHint.style.left = `${Math.max(4, Math.round(left))}px`;
+      dragHint.style.top = `${Math.max(4, Math.round(top))}px`;
+    } catch {
+      /* 忽略 */
+    }
+  };
+
   /**
    * 轻提示（独立版没有侧边竖牌，用一条浮出来的小条）。
    * @param {string} message - 文案。
@@ -3473,6 +3953,67 @@ function mountKnest(options = {}) {
     }
   };
 
+  /**
+   * 把画布上的树导成 Markdown：下载一份 .md，同时复制到剪贴板。
+   *
+   * 独立版没有宿主的文件系统权限，所以走浏览器下载这一条；
+   * 复制是顺手给的，方便直接粘进笔记。
+   *
+   * @returns {void}
+   */
+  const exportTree = () => {
+    try {
+      const snap = board.snapshot();
+      const list = Array.isArray(snap?.nodes) ? snap.nodes : [];
+      if (list.length === 0) {
+        flash('画布上还没有卡片');
+        return;
+      }
+      const kids = (id) => list.filter((node) => (node.parentId ?? null) === id);
+      const lines = ['# 词林 · 知识树', '', `导出时间：${new Date().toLocaleString()}`, ''];
+      const walk = (node, depth) => {
+        const pad = '  '.repeat(depth);
+        const lead = typeof node.model?.lead === 'string' ? node.model.lead : '';
+        lines.push(`${pad}- **${node.text}**${lead === '' ? '' : ` — ${lead}`}`);
+        for (const child of kids(node.id)) walk(child, depth + 1);
+      };
+      for (const root of list.filter((node) => (node.parentId ?? null) === null)) walk(root, 0);
+      const text = lines.join('\n');
+
+      let downloaded = false;
+      try {
+        const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = doc.createElement('a');
+        link.href = url;
+        link.download = `词林-知识树-${new Date().toISOString().slice(0, 10)}.md`;
+        link.style.display = 'none';
+        (doc.body ?? doc.documentElement).appendChild(link);
+        link.click();
+        link.remove();
+        win.setTimeout(() => URL.revokeObjectURL(url), 1500);
+        downloaded = true;
+      } catch {
+        downloaded = false;
+      }
+
+      let copied = false;
+      try {
+        win.navigator?.clipboard?.writeText?.(text);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+
+      if (downloaded && copied) flash(`已导出 ${list.length} 张卡片：下载了一份 .md，也复制到了剪贴板`);
+      else if (downloaded) flash(`已导出 ${list.length} 张卡片：下载了一份 .md`);
+      else if (copied) flash(`已导出 ${list.length} 张卡片：内容已复制到剪贴板`);
+      else flash('导出失败：浏览器拦了下载和剪贴板');
+    } catch (error) {
+      flash(`导出出错：${String(error?.message ?? error).slice(0, 60)}`);
+    }
+  };
+
   const board = createTreeBoard({
     doc,
     onRetry: (nodeId, phrase) => runExplain({ phrase, nodeId, force: true }),
@@ -3483,12 +4024,57 @@ function mountKnest(options = {}) {
       }
       runExplain({ phrase: term, parentId: nodeId, nodeId: `${nodeId}::${hashString(term)}` });
     },
-    onExport: () => flash('独立版暂不支持导出'),
+    onExport: () => exportTree(),
   });
   board.mount();
 
   const annotator = createAnnotator({ doc, win });
   annotator.restore();
+
+  /* 设置面板：直接建在宿主页面里，读写的是同一个 config.json */
+  const setupPort = Number(options.setupPort ?? 7332);
+  const settings = createSettings({
+    doc,
+    win,
+    port: setupPort,
+    onToast: (message) => flash(message),
+  });
+  const gear = doc.createElement('button');
+  gear.type = 'button';
+  gear.className = 'knest-edge-tab';
+  gear.title = '词林：点这里选模型、填钥匙';
+  gear.innerHTML = '<span>词林</span>';
+  gear.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    settings.toggle();
+  });
+  gear.addEventListener('contextmenu', (event) => event.stopPropagation());
+  (doc.body ?? doc.documentElement).appendChild(gear);
+
+  /* 还没配模型时亮个红点，告诉用户这里要点 */
+  const markUnconfigured = async () => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${setupPort}/state`);
+      const state = await res.json();
+      const configured = typeof state?.saved?.baseUrl === 'string' && state.saved.baseUrl.trim() !== '';
+      gear.setAttribute('data-alert', configured ? '0' : '1');
+    } catch {
+      gear.setAttribute('data-alert', '1');
+    }
+  };
+  markUnconfigured();
+  /* 面板关掉时重新看一眼，配好了就把红点熄掉 */
+  const tabObserver = new MutationObserver(() => {
+    const open = settings.isOpen();
+    gear.setAttribute('data-open', open ? 'true' : 'false');
+    if (!open) markUnconfigured();
+  });
+  try {
+    tabObserver.observe(settings.el, { attributes: true, attributeFilter: ['data-open'] });
+  } catch {
+    /* 忽略 */
+  }
 
   const menu = createMenu({ doc, onAction: (action, data) => onMenuAction(action, data) });
 
@@ -3575,9 +4161,23 @@ function mountKnest(options = {}) {
   const disposeSelector = attachSelector(doc, {
     leftEnabled: () => annotator.isOn(),
     isEnabled: () => true,
+    /* 拖动过程中实时上色 + 报字数：右键拖动没有原生选区，不这么做用户看不见自己选到哪 */
+    onLive: (range, at) => {
+      if (range === null || range === undefined) {
+        hideDragHint();
+        return;
+      }
+      painter.paint(range);
+      showDragHint(range, at?.x, at?.y);
+    },
+    onCancel: () => {
+      hideDragHint();
+      painter.clear();
+    },
     onPick: (payload) => {
       const { phrase, range, rect } = payload;
       const clean = typeof phrase === 'string' ? phrase.trim() : '';
+      hideDragHint();
       if (clean === '') return;
       if (annotator.isOn()) {
         if (payload?.dragged !== true || range === null) {
@@ -3603,7 +4203,7 @@ function mountKnest(options = {}) {
     },
   });
 
-  win[GLOBAL_KEY] = { board, annotator, dispose };
+  win[GLOBAL_KEY] = { board, annotator, settings, dispose };
 
   /**
    * 卸载。
@@ -3618,6 +4218,12 @@ function mountKnest(options = {}) {
     board.dispose();
     annotator.dispose();
     try {
+      settings.dispose();
+      gear.remove();
+    } catch {
+      /* 忽略 */
+    }
+    try {
       stopTheme?.();
     } catch {
       /* 忽略 */
@@ -3626,7 +4232,7 @@ function mountKnest(options = {}) {
     delete win[GLOBAL_KEY];
   }
 
-  flash(`词林已挂到 ${options.appName ?? '当前窗口'}`);
+  flash(`词林已挂到 ${options.appName ?? '当前窗口'}　右侧「词林」竖条可设置模型`);
   return { board, annotator, dispose };
 }
 
