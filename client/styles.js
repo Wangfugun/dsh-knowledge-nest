@@ -14,6 +14,8 @@
  */
 
 /** 样式版本号：写进 style 标签，方便一眼确认浏览器里跑的是哪一版。 */
+import { KNEST_SKIN_CSS } from './skins.js';
+
 export const KNEST_STYLE_REV = 'r2';
 
 /** 样式正文。 */
@@ -140,7 +142,7 @@ export const KNEST_CSS = [
   '.knest-edge-tab span{display:block;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:.26em;font-size:11.5px;line-height:1;white-space:nowrap}',
   '.knest-edge-tab[data-alert="1"]::after{content:"";position:absolute;top:8px;right:7px;width:7px;height:7px;border-radius:50%;background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.22);animation:knest-pulse 1.8s ease-in-out infinite}',
   '@keyframes knest-pulse{0%,100%{opacity:1}50%{opacity:.35}}',
-  '.knest-settings{position:fixed;right:18px;bottom:62px;width:352px;max-height:calc(100vh - 110px);overflow:auto;z-index:2147483004;background:var(--kn-panel);border:1px solid var(--kn-rule);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.42);color:var(--kn-ink);font-size:12.5px;line-height:1.6;padding:14px 16px 16px;display:none}',
+  '.knest-settings{position:fixed;right:18px;bottom:64px;width:352px;max-height:calc(100vh - 110px);overflow:auto;z-index:2147483004;background:var(--kn-panel);border:1px solid var(--kn-rule);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.42);color:var(--kn-ink);font-size:12.5px;line-height:1.6;padding:14px 16px 16px;display:none}',
   '.knest-settings[data-open="true"]{display:block}',
   '.knest-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}',
   '.knest-set-head b{font-size:13px;font-weight:600}',
@@ -177,7 +179,7 @@ export const KNEST_CSS = [
 
   /* ── 右键菜单（关掉圈词时用） ─────────────────────────────────── */
   '#knest-menu-layer{position:fixed;inset:0;z-index:2147483001;pointer-events:none}',
-  '.knest-menu{position:absolute;pointer-events:auto;min-width:176px;padding:5px;background:var(--kn-panel);color:var(--kn-ink);border:1px solid var(--kn-rule);box-shadow:var(--kn-shadow);font-size:12.5px;line-height:1.5}',
+  '.knest-menu{position:absolute;pointer-events:auto;min-width:176px;padding:5px;background:var(--kn-panel);color:var(--kn-ink);border:1px solid var(--kn-rule);box-shadow:none;font-size:12.5px;line-height:1.5}',
   '.knest-mi{display:flex;align-items:center;gap:9px;width:100%;padding:6px 8px;border:0;background:none;color:var(--kn-ink);font:inherit;text-align:left;cursor:pointer}',
   '.knest-mi:hover:not(:disabled){background:var(--kn-echo-soft)}',
   '.knest-mi:disabled{opacity:.36;cursor:default}',
@@ -320,13 +322,14 @@ export function ensureStyles(doc) {
       ? document.querySelector('style[data-knest-style]')
       : null;
     if (existing !== null && existing !== undefined) {
-      if (existing.textContent !== KNEST_CSS) existing.textContent = KNEST_CSS;
+      const full = KNEST_CSS + '\n' + KNEST_SKIN_CSS.join('\n');
+      if (existing.textContent !== full) existing.textContent = full;
       existing.setAttribute('data-knest-style', KNEST_STYLE_REV);
       return;
     }
     const style = document.createElement('style');
     style.setAttribute('data-knest-style', KNEST_STYLE_REV);
-    style.textContent = KNEST_CSS;
+    style.textContent = KNEST_CSS + '\n' + KNEST_SKIN_CSS.join('\n');
     const head = document.head ?? document.body;
     if (head !== null && head !== undefined && typeof head.appendChild === 'function') head.appendChild(style);
   } catch {
