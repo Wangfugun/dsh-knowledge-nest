@@ -17,6 +17,8 @@ import { createTreeBoard } from './tree-board.js';
 import { createMenu } from './menu.js';
 import { createAnnotator } from './annotate.js';
 import { KNEST_CSS } from './styles.js';
+import { KNEST_SKIN_CSS } from './skins.js';
+import { applyPrefs, readPrefs } from './prefs.js';
 import { contextAroundRange } from './phrase.js';
 import { createSettings } from './settings.js';
 import { hashString } from './util.js';
@@ -43,7 +45,7 @@ export function mountKnest(options = {}) {
   if (doc.getElementById('knest-style') === null) {
     const style = doc.createElement('style');
     style.id = 'knest-style';
-    style.textContent = KNEST_CSS;
+    style.textContent = KNEST_CSS + '\n' + KNEST_SKIN_CSS.join('\n');
     (doc.head ?? doc.documentElement).appendChild(style);
   }
   /* 跟着宿主的明暗走：读页面背景亮度，别硬写 dark */
@@ -198,6 +200,9 @@ export function mountKnest(options = {}) {
     },
     onExport: () => exportTree(),
   });
+  /* 先把外观偏好打到 html 上，否则第一帧是默认皮肤 */
+  applyPrefs();
+
   board.mount();
 
   const annotator = createAnnotator({ doc, win });
@@ -211,11 +216,25 @@ export function mountKnest(options = {}) {
     port: setupPort,
     onToast: (message) => flash(message),
   });
+  /* 语言一变就把面板文案重写一遍 */
+  const onPrefsChange = () => {
+    try { settings.retranslate?.(); } catch {}
+    try { paintLangBadge(); } catch {}
+  };
+  win.addEventListener?.('knest-prefs', onPrefsChange);
+
   const gear = doc.createElement('button');
   gear.type = 'button';
-  gear.className = 'knest-edge-tab';
-  gear.title = '词林：点这里选模型、填钥匙';
-  gear.innerHTML = '<span>词林</span>';
+  gear.className = 'knest-logo-btn';
+  gear.title = '词林 · 外观、长度、语言都在这里';
+  gear.innerHTML = '<span class="g">词</span><span>词林</span><span class="knest-fab-lang"></span>';
+
+  /* 当前语言挂在按钮上：出问题时一眼看出是代码没生效还是逻辑有问题 */
+  const langBadge = gear.querySelector('.knest-fab-lang');
+  const paintLangBadge = () => {
+    if (langBadge) langBadge.textContent = readPrefs().lang;
+  };
+  paintLangBadge();
   gear.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
