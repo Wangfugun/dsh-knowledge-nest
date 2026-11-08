@@ -22,7 +22,8 @@ const argOf = (name, fallback = '') => {
 };
 
 const port = Number(argOf('--port', '9222'));
-const endpoint = argOf('--endpoint', 'http://127.0.0.1:7331');
+/* 默认对齐配置服务的端口（7332）：写 7331 会连不上，卡片只报「连不上本机插件路由」 */
+const endpoint = argOf('--endpoint', 'http://127.0.0.1:7332');
 const dispose = args.includes('--dispose');
 const bundlePath = join(process.cwd(), 'client-standalone.js');
 
@@ -109,6 +110,20 @@ if (dispose) {
 
 const bundle = readFileSync(bundlePath, 'utf8');
 const expression = `${bundle}\n;window.__knestMount({ endpoint: ${JSON.stringify(endpoint)} }); "mounted"`;
+
+/* 注入前彻底清场：上一次注入如果没收干净，会留下重复的菜单层和按钮 */
+await conn.send('Runtime.evaluate', {
+  expression: `(() => {
+    try { window.__knestStandalone?.dispose?.(); } catch (e) {}
+    const kill = ['.knest-menu', '.knest-logo-btn', '.knest-look-panel', '.knest-settings',
+                  '.knest-edge-tab', '#knest-menu-layer', '#knest-look-fab', '#knest-board'];
+    let n = 0;
+    for (const sel of kill) {
+      for (const el of document.querySelectorAll(sel)) { el.remove(); n += 1; }
+    }
+    return n;
+  })()`,
+});
 
 const result = await conn.send('Runtime.evaluate', {
   expression,
