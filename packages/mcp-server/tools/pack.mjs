@@ -41,6 +41,8 @@ for (const item of items) {
 }
 mkdirSync(join(outDir, 'tools'), { recursive: true });
 cpSync(join(PKG, 'tools', 'selfcheck.mjs'), join(outDir, 'tools', 'selfcheck.mjs'));
+cpSync(join(PKG, 'tools', 'check-model.mjs'), join(outDir, 'tools', 'check-model.mjs'));
+cpSync(join(PKG, 'tools', 'setup.mjs'), join(outDir, 'tools', 'setup.mjs'));
 
 /* 1.5 把跨包依赖搬进包里，让产物自包含
  *
@@ -69,7 +71,7 @@ const rewrite = (file) => {
   }
   return false;
 };
-const touched = ['src/server.js', 'src/explain-tool.js'].filter((rel) => rewrite(join(outDir, rel)));
+const touched = ['src/server.js', 'src/explain-tool.js', 'src/setup.js'].filter((rel) => rewrite(join(outDir, rel)));
 console.log(`已改写跨包导入：${touched.join(', ') || '（无需改写）'}`);
 
 /* 2. 运行时依赖（客户端不会替你装） */
@@ -104,7 +106,31 @@ writeFileSync(join(outDir, '怎么用.md'), `# 怎么把它接进 Cherry Studio
 十二项全过（退出码 0）才往下走。若提示「数据目录落在系统盘」，把下面配置里的
 KNEST_HOME 改到别的盘再自检。
 
-## 2. 填进客户端
+## 2. 填钥匙：用配置页，不用手改 JSON
+
+把它接进客户端之后（见第 3 步），客户端启动这个 server 时，日志里会多出一行：
+
+\`\`\`
+[knowledge-nest] 配置页：http://127.0.0.1:7332/?token=xxxxxxxx
+\`\`\`
+
+**把那个地址复制到浏览器打开**，你会看到一个配置页：
+
+- 四个选项：DeepSeek、其他 OpenAI 兼容接口、本机 Ollama、本机 LM Studio
+- 选本机模型不用填钥匙，选云端填一把 key
+- 点「保存并测试」，它会立刻发一次真实请求，成不成当场就知道
+- 保存后**不用重启客户端**，下一次调用就按新配置走
+
+如果找不到那行日志，或者想知道地址，直接在对话里让模型解释一个词：没有钥匙时
+它返回的错误里就带着这个地址。
+
+只想用命令行？也可以：
+
+\`\`\`
+"${process.execPath}" "${join(outDir, 'tools', 'check-model.mjs')}"
+\`\`\`
+
+## 3. 填进客户端
 
 Cherry Studio 的 MCP 设置里添加一个自定义服务器，粘贴 cherry-config.json 的内容：
 
@@ -116,10 +142,9 @@ ${JSON.stringify(clientConfig, null, 2)}
 
 - \`command\` 用 node 的绝对路径，不要写裸 \`node\`（客户端的环境变量未必带你习惯的 PATH）；
 - \`args\` 指向本包的 \`src/index.js\`，路径别抄示例，用你实际解压的位置；
-- \`env\` 至少要给 KNEST_HOME 与一把钥匙；想用本机免费模型就换成
-  \`KNEST_PROVIDER=ollama\` 加 \`OPENAI_MODEL\`，不需要钥匙。
+- \`env\` 至少要给 KNEST_HOME；钥匙可以不填，用第 2 步的配置页填更省事。
 
-## 3. 用
+## 4. 用
 
 在对话里说：「用 knowledge-nest 解释一下『某某词』在这段话里的意思，上下文是……」
 
