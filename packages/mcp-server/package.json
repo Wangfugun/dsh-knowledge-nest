@@ -1,6 +1,6 @@
 {
   "name": "@knest/mcp-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "knowledge_nest_explain as an MCP tool: explain what a word or sentence means inside a given conversation, using an OpenAI-compatible chat API.",
