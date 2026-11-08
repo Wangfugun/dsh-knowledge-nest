@@ -22,6 +22,7 @@ const SOURCES = [
   'client/annotate.js',
   'client/tree-board.js',
   'client/styles.js',
+  'client/settings.js',
   'client/standalone.js',
 ];
 
