@@ -10,6 +10,7 @@
  * 图标全部手画（SVG，16×16，1.4px 描边），不引入字体、不拼 innerHTML。
  */
 
+import { t } from './i18n.js';
 /** 菜单根 id。 */
 const MENU_ID = 'knest-menu-layer';
 
@@ -220,9 +221,11 @@ export function createMenu(options = {}) {
   const ensureRoot = () => {
     if (doc === null) return null;
     if (root !== null && root.isConnected !== false) return root;
-    const existing = typeof doc.getElementById === 'function' ? doc.getElementById(MENU_ID) : null;
-    if (existing !== null && existing !== undefined) {
-      root = existing;
+    /* 注入两遍时页面上会有两个同 id 的层，只留最后一个，其余拆掉 */
+    const all = typeof doc.querySelectorAll === 'function' ? [...doc.querySelectorAll('#' + MENU_ID)] : [];
+    if (all.length > 0) {
+      for (const extra of all.slice(0, -1)) extra.remove();
+      root = all[all.length - 1];
       root.textContent = '';
       return root;
     }
@@ -265,7 +268,7 @@ export function createMenu(options = {}) {
     if (next === 'more') {
       const back = menuEl(doc, 'button', { class: 'knest-mi knest-mi-lead', type: 'button', 'data-nav': 'back' }, [
         menuIcon(doc, 'back'),
-        menuEl(doc, 'span', { class: 'knest-mi-label', text: '返回' }),
+        menuEl(doc, 'span', { class: 'knest-mi-label', text: t('返回') }),
       ]);
       back.addEventListener('click', (event) => {
         event.preventDefault();
@@ -284,12 +287,12 @@ export function createMenu(options = {}) {
         'data-action': item.action,
         disabled: item.disabled === true,
         title: item.disabled === true
-          ? (item.action === 'copy-explain' ? '先查询一次，才有释义可复制' : '先选中一段文字')
-          : item.label,
+          ? (item.action === 'copy-explain' ? t('先查询一次，才有释义可复制') : t('先选中一段文字'))
+          : t(item.label),
       }, [
         menuIcon(doc, item.action),
-        menuEl(doc, 'span', { class: 'knest-mi-label', text: item.label }),
-        menuEl(doc, 'span', { class: 'knest-mi-hint', text: item.hint }),
+        menuEl(doc, 'span', { class: 'knest-mi-label', text: t(item.label) }),
+        menuEl(doc, 'span', { class: 'knest-mi-hint', text: t(item.hint) }),
       ]);
       box.appendChild(button);
     }
@@ -298,7 +301,7 @@ export function createMenu(options = {}) {
       box.appendChild(menuEl(doc, 'div', { class: 'knest-mdiv' }));
       const more = menuEl(doc, 'button', { class: 'knest-mi knest-mi-more', type: 'button', 'data-nav': 'more' }, [
         menuIcon(doc, 'more'),
-        menuEl(doc, 'span', { class: 'knest-mi-label', text: '更多' }),
+        menuEl(doc, 'span', { class: 'knest-mi-label', text: t('更多') }),
       ]);
       more.addEventListener('click', (event) => {
         event.preventDefault();
@@ -321,11 +324,15 @@ export function createMenu(options = {}) {
     show(rect, data) {
       const host = ensureRoot();
       if (host === null) return;
+      /* 复用 root 时先把上一次的菜单拆干净：
+         不清的话旧 menu 会留在层里，既叠出两个，也让人看到旧语言的文字。 */
+      host.textContent = '';
+      box = null;
       hide();
       anchor = rect ?? { left: 8, top: 8, right: 8, bottom: 8 };
       payload = data ?? { phrase: '', selection: '', hasSelection: false, hasExplain: false };
 
-      box = menuEl(doc, 'div', { class: 'knest-menu', role: 'menu', 'aria-label': '选区操作' });
+      box = menuEl(doc, 'div', { class: 'knest-menu', role: 'menu', 'aria-label': t('选区操作') });
       box.addEventListener('mousedown', (event) => event.preventDefault());
       box.addEventListener('click', (event) => {
         const target = event.target;
