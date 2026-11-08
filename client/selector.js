@@ -114,7 +114,8 @@ export function attachSelector(doc, handlers = {}) {
     const end = pointAt(doc, event.clientX, event.clientY);
     const { range } = rangeBetween(doc, startPoint, end);
     try {
-      handlers.onLive?.(range);
+      /* 带上指针坐标：调用方要用它把「已选 N 字」贴到光标旁边 */
+      handlers.onLive?.(range, { x: event.clientX, y: event.clientY });
     } catch {
       /* 忽略 */
     }
