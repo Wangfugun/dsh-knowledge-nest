@@ -15,7 +15,7 @@ import { MODE_VALUES, TOOL_NAME, runExplainTool } from './explain-tool.js';
 import { createModelProvider, resolveModel } from './model.js';
 
 /** 版本号（与 package.json 保持一致，免得客户端缓存对不上）。 */
-export const SERVER_VERSION = '0.2.0';
+export const SERVER_VERSION = '0.3.0';
 
 /** 服务名。 */
 export const SERVER_NAME = 'knowledge-nest';
@@ -30,18 +30,21 @@ export function precheckModel(env = process.env) {
   if (model.enabled === false) {
     return { ok: false, code: 'disabled', message: 'config.json 里 enabled=false，功能被关掉了' };
   }
+  const setupUrl = typeof env.KNEST_SETUP_URL === 'string' ? env.KNEST_SETUP_URL.trim() : '';
+  const setupHint = setupUrl === '' ? '' : ` 也可以直接在浏览器打开配置页填：${setupUrl}`;
+
   if (model.apiKey === '') {
     return {
       ok: false,
       code: 'no-key',
-      message: '没找到 key：设 DEEPSEEK_API_KEY（或 OPENAI_API_KEY），或写进 $KNEST_HOME/config.json 的 apiKey',
+      message: '没找到 key：设 DEEPSEEK_API_KEY（或 OPENAI_API_KEY），或写进 $KNEST_HOME/config.json 的 apiKey。' + setupHint,
     };
   }
   if (model.baseUrl === '') {
     return { ok: false, code: 'no-base-url', message: '没找到接口地址：设 OPENAI_BASE_URL 或 DEEPSEEK_BASE_URL' };
   }
   if (model.model === '') {
-    return { ok: false, code: 'no-model', message: '没找到模型名：设 OPENAI_MODEL 或 DEEPSEEK_MODEL（非 DeepSeek 端点必须显式给）' };
+    return { ok: false, code: 'no-model', message: '没找到模型名：设 OPENAI_MODEL 或 DEEPSEEK_MODEL（非 DeepSeek 端点必须显式给）。' + setupHint };
   }
   return null;
 }
