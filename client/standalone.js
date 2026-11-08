@@ -18,6 +18,7 @@ import { createMenu } from './menu.js';
 import { createAnnotator } from './annotate.js';
 import { KNEST_CSS } from './styles.js';
 import { contextAroundRange } from './phrase.js';
+import { createSettings } from './settings.js';
 import { hashString } from './util.js';
 import { detectTheme, stampTheme, watchTheme } from './theme.js';
 
@@ -53,6 +54,56 @@ export function mountKnest(options = {}) {
 
   const painter = createPainter(doc);
   let flashToast = null;
+
+  /* 拖动时的字数提示。
+     右键拖动时浏览器不产生原生选区，光靠高亮很难判断拖了多长，
+     所以在指针旁边挂一个小气泡，实时报「已选 N 字」。 */
+  let dragHint = null;
+  const hideDragHint = () => {
+    try {
+      dragHint?.setAttribute('data-show', 'false');
+    } catch {
+      /* 忽略 */
+    }
+  };
+
+  /**
+   * 更新拖动提示。
+   * @param {Range|null} range - 当前选区。
+   * @param {number} [x] - 指针横坐标。
+   * @param {number} [y] - 指针纵坐标。
+   * @returns {void}
+   */
+  const showDragHint = (range, x, y) => {
+    try {
+      const count = range === null || range === undefined ? 0 : [...String(range.toString()).replace(/\s+/gu, '')].length;
+      if (count === 0) {
+        hideDragHint();
+        return;
+      }
+      if (dragHint === null || dragHint.parentNode === null) {
+        dragHint = doc.createElement('div');
+        dragHint.className = 'knest-drag-hint';
+        dragHint.setAttribute('data-show', 'false');
+        (doc.body ?? doc.documentElement).appendChild(dragHint);
+      }
+      dragHint.textContent = `已选 ${count} 字`;
+      dragHint.setAttribute('data-show', 'true');
+
+      const px = typeof x === 'number' ? x : win.innerWidth / 2;
+      const py = typeof y === 'number' ? y : win.innerHeight / 2;
+      const gap = 16;
+      const boxW = 100;
+      const boxH = 30;
+      const left = px + gap + boxW > win.innerWidth ? px - gap - boxW : px + gap;
+      const top = py + gap + boxH > win.innerHeight ? py - gap - boxH : py + gap;
+      dragHint.style.left = `${Math.max(4, Math.round(left))}px`;
+      dragHint.style.top = `${Math.max(4, Math.round(top))}px`;
+    } catch {
+      /* 忽略 */
+    }
+  };
+
   /**
    * 轻提示（独立版没有侧边竖牌，用一条浮出来的小条）。
    * @param {string} message - 文案。
@@ -74,6 +125,67 @@ export function mountKnest(options = {}) {
     }
   };
 
+  /**
+   * 把画布上的树导成 Markdown：下载一份 .md，同时复制到剪贴板。
+   *
+   * 独立版没有宿主的文件系统权限，所以走浏览器下载这一条；
+   * 复制是顺手给的，方便直接粘进笔记。
+   *
+   * @returns {void}
+   */
+  const exportTree = () => {
+    try {
+      const snap = board.snapshot();
+      const list = Array.isArray(snap?.nodes) ? snap.nodes : [];
+      if (list.length === 0) {
+        flash('画布上还没有卡片');
+        return;
+      }
+      const kids = (id) => list.filter((node) => (node.parentId ?? null) === id);
+      const lines = ['# 词林 · 知识树', '', `导出时间：${new Date().toLocaleString()}`, ''];
+      const walk = (node, depth) => {
+        const pad = '  '.repeat(depth);
+        const lead = typeof node.model?.lead === 'string' ? node.model.lead : '';
+        lines.push(`${pad}- **${node.text}**${lead === '' ? '' : ` — ${lead}`}`);
+        for (const child of kids(node.id)) walk(child, depth + 1);
+      };
+      for (const root of list.filter((node) => (node.parentId ?? null) === null)) walk(root, 0);
+      const text = lines.join('\n');
+
+      let downloaded = false;
+      try {
+        const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = doc.createElement('a');
+        link.href = url;
+        link.download = `词林-知识树-${new Date().toISOString().slice(0, 10)}.md`;
+        link.style.display = 'none';
+        (doc.body ?? doc.documentElement).appendChild(link);
+        link.click();
+        link.remove();
+        win.setTimeout(() => URL.revokeObjectURL(url), 1500);
+        downloaded = true;
+      } catch {
+        downloaded = false;
+      }
+
+      let copied = false;
+      try {
+        win.navigator?.clipboard?.writeText?.(text);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+
+      if (downloaded && copied) flash(`已导出 ${list.length} 张卡片：下载了一份 .md，也复制到了剪贴板`);
+      else if (downloaded) flash(`已导出 ${list.length} 张卡片：下载了一份 .md`);
+      else if (copied) flash(`已导出 ${list.length} 张卡片：内容已复制到剪贴板`);
+      else flash('导出失败：浏览器拦了下载和剪贴板');
+    } catch (error) {
+      flash(`导出出错：${String(error?.message ?? error).slice(0, 60)}`);
+    }
+  };
+
   const board = createTreeBoard({
     doc,
     onRetry: (nodeId, phrase) => runExplain({ phrase, nodeId, force: true }),
@@ -84,12 +196,57 @@ export function mountKnest(options = {}) {
       }
       runExplain({ phrase: term, parentId: nodeId, nodeId: `${nodeId}::${hashString(term)}` });
     },
-    onExport: () => flash('独立版暂不支持导出'),
+    onExport: () => exportTree(),
   });
   board.mount();
 
   const annotator = createAnnotator({ doc, win });
   annotator.restore();
+
+  /* 设置面板：直接建在宿主页面里，读写的是同一个 config.json */
+  const setupPort = Number(options.setupPort ?? 7332);
+  const settings = createSettings({
+    doc,
+    win,
+    port: setupPort,
+    onToast: (message) => flash(message),
+  });
+  const gear = doc.createElement('button');
+  gear.type = 'button';
+  gear.className = 'knest-edge-tab';
+  gear.title = '词林：点这里选模型、填钥匙';
+  gear.innerHTML = '<span>词林</span>';
+  gear.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    settings.toggle();
+  });
+  gear.addEventListener('contextmenu', (event) => event.stopPropagation());
+  (doc.body ?? doc.documentElement).appendChild(gear);
+
+  /* 还没配模型时亮个红点，告诉用户这里要点 */
+  const markUnconfigured = async () => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${setupPort}/state`);
+      const state = await res.json();
+      const configured = typeof state?.saved?.baseUrl === 'string' && state.saved.baseUrl.trim() !== '';
+      gear.setAttribute('data-alert', configured ? '0' : '1');
+    } catch {
+      gear.setAttribute('data-alert', '1');
+    }
+  };
+  markUnconfigured();
+  /* 面板关掉时重新看一眼，配好了就把红点熄掉 */
+  const tabObserver = new MutationObserver(() => {
+    const open = settings.isOpen();
+    gear.setAttribute('data-open', open ? 'true' : 'false');
+    if (!open) markUnconfigured();
+  });
+  try {
+    tabObserver.observe(settings.el, { attributes: true, attributeFilter: ['data-open'] });
+  } catch {
+    /* 忽略 */
+  }
 
   const menu = createMenu({ doc, onAction: (action, data) => onMenuAction(action, data) });
 
@@ -176,9 +333,23 @@ export function mountKnest(options = {}) {
   const disposeSelector = attachSelector(doc, {
     leftEnabled: () => annotator.isOn(),
     isEnabled: () => true,
+    /* 拖动过程中实时上色 + 报字数：右键拖动没有原生选区，不这么做用户看不见自己选到哪 */
+    onLive: (range, at) => {
+      if (range === null || range === undefined) {
+        hideDragHint();
+        return;
+      }
+      painter.paint(range);
+      showDragHint(range, at?.x, at?.y);
+    },
+    onCancel: () => {
+      hideDragHint();
+      painter.clear();
+    },
     onPick: (payload) => {
       const { phrase, range, rect } = payload;
       const clean = typeof phrase === 'string' ? phrase.trim() : '';
+      hideDragHint();
       if (clean === '') return;
       if (annotator.isOn()) {
         if (payload?.dragged !== true || range === null) {
@@ -204,7 +375,7 @@ export function mountKnest(options = {}) {
     },
   });
 
-  win[GLOBAL_KEY] = { board, annotator, dispose };
+  win[GLOBAL_KEY] = { board, annotator, settings, dispose };
 
   /**
    * 卸载。
@@ -219,6 +390,12 @@ export function mountKnest(options = {}) {
     board.dispose();
     annotator.dispose();
     try {
+      settings.dispose();
+      gear.remove();
+    } catch {
+      /* 忽略 */
+    }
+    try {
       stopTheme?.();
     } catch {
       /* 忽略 */
@@ -227,6 +404,6 @@ export function mountKnest(options = {}) {
     delete win[GLOBAL_KEY];
   }
 
-  flash(`词林已挂到 ${options.appName ?? '当前窗口'}`);
+  flash(`词林已挂到 ${options.appName ?? '当前窗口'}　右侧「词林」竖条可设置模型`);
   return { board, annotator, dispose };
 }
