@@ -549,6 +549,79 @@ export function createTreeBoard(options = {}) {
 
     hud = el('div', { class: 'knest-board-hud' }, [exportBtn, reset, clear]);
 
+    /* HUD 可拖动：宿主底部常有自己的工具条，固定位置迟早被挡。
+       拖过之后位置记在 localStorage，下次还在这儿。 */
+    const hudKey = 'knest.hud.pos';
+    const restoreHud = () => {
+      try {
+        const raw = doc?.defaultView?.localStorage?.getItem(hudKey);
+        if (typeof raw !== 'string' || raw === '') return;
+        const pos = JSON.parse(raw);
+        if (Number.isFinite(pos?.left) && Number.isFinite(pos?.top)) {
+          hud.style.left = `${Math.round(pos.left)}px`;
+          hud.style.top = `${Math.round(pos.top)}px`;
+          hud.style.right = 'auto';
+          hud.style.bottom = 'auto';
+        }
+      } catch {
+        /* 忽略 */
+      }
+    };
+    restoreHud();
+
+    let hudDrag = null;
+    const onHudMove = (event) => {
+      if (hudDrag === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const dx = event.clientX - hudDrag.startX;
+      const dy = event.clientY - hudDrag.startY;
+      const box = stage?.getBoundingClientRect?.() ?? { width: 1280, height: 800 };
+      const width = hud.offsetWidth || 90;
+      const height = hud.offsetHeight || 28;
+      const left = Math.min(Math.max(4, hudDrag.originLeft + dx), (Number(box.width) || 1280) - width - 4);
+      const top = Math.min(Math.max(4, hudDrag.originTop + dy), (Number(box.height) || 800) - height - 4);
+      hud.style.left = `${Math.round(left)}px`;
+      hud.style.top = `${Math.round(top)}px`;
+      hud.style.right = 'auto';
+      hud.style.bottom = 'auto';
+    };
+    const onHudUp = (event) => {
+      if (hudDrag === null) return;
+      hudDrag = null;
+      hud.setAttribute('data-dragging', 'false');
+      doc?.removeEventListener?.('pointermove', onHudMove, true);
+      doc?.removeEventListener?.('pointerup', onHudUp, true);
+      try {
+        const box = hud.getBoundingClientRect();
+        const stageBox = stage?.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+        doc?.defaultView?.localStorage?.setItem(hudKey, JSON.stringify({
+          left: box.left - stageBox.left,
+          top: box.top - stageBox.top,
+        }));
+      } catch {
+        /* 忽略 */
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    hud.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      /* 点在按钮上就别拖，留给按钮自己处理 */
+      if (event.target?.closest?.('.knest-hud-btn') !== null) return;
+      const box = hud.getBoundingClientRect();
+      const stageBox = stage?.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+      hudDrag = {
+        startX: event.clientX,
+        startY: event.clientY,
+        originLeft: box.left - stageBox.left,
+        originTop: box.top - stageBox.top,
+      };
+      hud.setAttribute('data-dragging', 'true');
+      doc?.addEventListener?.('pointermove', onHudMove, true);
+      doc?.addEventListener?.('pointerup', onHudUp, true);
+    });
+
     stage = el('div', { class: 'knest-board-main' }, [world, hud]);
     /* 挂载时必须先藏起来：没有这个初始属性，隐藏规则匹配不上，HUD 会一直露在左下角。 */
     root = el('div', { class: 'knest-board', id: 'knest-board', 'data-open': 'false' }, [stage]);
@@ -576,6 +649,9 @@ export function createTreeBoard(options = {}) {
   };
 
 
+  /** 待执行的那一帧；null 表示当前帧没人排队。 */
+  let dragFrame = null;
+
   function startNodeDrag(event, id) {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -583,6 +659,7 @@ export function createTreeBoard(options = {}) {
     const node = get(id);
     if (node === null) return;
     const group = selected.has(id) && selected.size > 1 ? [...selected] : [id];
+    const stageTop = (stage ?? root)?.getBoundingClientRect?.()?.top ?? 0;
     drag = {
       kind: 'node',
       id,
@@ -590,8 +667,11 @@ export function createTreeBoard(options = {}) {
       origins: group.map((item) => ({ id: item, x: get(item)?.x ?? 0, y: get(item)?.y ?? 0 })),
       startX: event.clientX,
       startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
       originX: node.x,
       originY: node.y,
+      minScreenY: stageTop + 80,
     };
     root?.setAttribute('data-dragging', 'true');
     doc?.addEventListener?.('pointermove', onPointerMove, true);
@@ -611,7 +691,7 @@ export function createTreeBoard(options = {}) {
     const alt = event.altKey === true;
     const middle = event.button === 1;
     if (!alt && !middle) return;
-    drag = { kind: 'pan', startX: event.clientX, startY: event.clientY, originX: panX, originY: panY };
+    drag = { kind: 'pan', startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, originX: panX, originY: panY, minScreenY: null };
     root.setAttribute('data-dragging', 'true');
     doc?.addEventListener?.('pointermove', onPointerMove, true);
     doc?.addEventListener?.('pointerup', onPointerUp, true);
@@ -620,38 +700,64 @@ export function createTreeBoard(options = {}) {
 
   function onPointerMove(event) {
     if (drag === null) return;
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
+    /* 只记住最新位置，真正的计算丢到下一帧做。
+       原来的写法是每个 pointermove 都全量算一遍，高刷鼠标一秒能触发一百多次，
+       再叠上 syncEdges 被调用两次，就成了肉眼可见的一顿一顿。 */
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    if (dragFrame !== null) return;
+    dragFrame = (doc?.defaultView?.requestAnimationFrame ?? ((fn) => setTimeout(fn, 16)))(() => {
+      dragFrame = null;
+      applyDragFrame();
+    });
+  }
+
+  /**
+   * 按最新指针位置重排卡片。一帧只跑一次。
+   * @returns {void}
+   */
+  function applyDragFrame() {
+    if (drag === null) return;
+    const dx = drag.lastX - drag.startX;
+    const dy = drag.lastY - drag.startY;
+
     if (drag.kind === 'pan') {
       panX = drag.originX + dx;
       panY = drag.originY + dy;
       applyView();
       return;
     }
+
     const node = get(drag.id);
     if (node === null) return;
-    const snap = (value) => (event.altKey === true ? Math.round(value) : Math.round(value / 12) * 12);
+
     const stepX = dx / scale;
     const stepY = dy / scale;
+    /* 顶部禁区的世界坐标下界，拖动开始时就算好，不必每帧重新量 DOM */
+    const minWorldY = drag.minScreenY === null ? null : (drag.minScreenY - panY) / scale;
+
     for (const origin of drag.origins ?? [{ id: drag.id, x: drag.originX, y: drag.originY }]) {
       const target = get(origin.id);
       if (target === null) continue;
-      target.x = snap(origin.x + stepX);
-      target.y = snap(origin.y + stepY);
+      /* 不再磁吸：以前按 12px 取整，拖起来是跳格的。现在跟手就是一像素一像素走。 */
+      let nextX = origin.x + stepX;
+      let nextY = origin.y + stepY;
+      if (minWorldY !== null && nextY < minWorldY) nextY = minWorldY;
+      target.x = nextX;
+      target.y = nextY;
       positionNode(target);
     }
-    syncEdges();
-    /* 顶部禁区：世界坐标下 titlebar 不得高于 TOP_GUARD */
-    const stageTop = (stage ?? root)?.getBoundingClientRect?.()?.top ?? 0;
-    const minScreenY = stageTop + 80;
-    const screenY = node.y * scale + panY;
-    if (screenY < minScreenY) node.y = Math.round((minScreenY - panY) / scale);
-    positionNode(node);
+    /* 全组位置都定了再连一次线；原来是边改边连、还连了两遍 */
     syncEdges();
   }
 
   function onPointerUp() {
     if (drag === null) return;
+    if (dragFrame !== null) {
+      (doc?.defaultView?.cancelAnimationFrame ?? clearTimeout)(dragFrame);
+      dragFrame = null;
+      applyDragFrame();
+    }
     const draggedId = drag.kind === 'node' ? drag.id : null;
     drag = null;
     if (draggedId !== null) {
