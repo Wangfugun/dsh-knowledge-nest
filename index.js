@@ -201,6 +201,9 @@ export function createRouteHandler(deps) {
         fingerprint: body?.fingerprint,
         model: body?.model,
         mode: body?.mode,
+        /* 语言与字数从客户端带上来；没带就让 explain 读配置文件 */
+        lang: body?.lang,
+        limit: body?.limit,
       });
       sendJson(res, 200, {
         ok: true,
