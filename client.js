@@ -2259,7 +2259,8 @@
           const end = pointAt(doc, event.clientX, event.clientY);
           const { range } = rangeBetween(doc, startPoint, end);
           try {
-            handlers.onLive?.(range);
+            /* 带上指针坐标：调用方要用它把「已选 N 字」贴到光标旁边 */
+            handlers.onLive?.(range, { x: event.clientX, y: event.clientY });
           } catch {
             /* 忽略 */
           }
@@ -2503,6 +2504,45 @@
         '#knest-switch{position:fixed;right:44px;top:22%;z-index:2147482999;pointer-events:auto}',
         '.knest-toast{position:fixed;right:56px;top:calc(38% - 8px);max-width:min(340px,60vw);padding:7px 11px;background:var(--kn-panel);border:1px solid var(--kn-rule);box-shadow:var(--kn-shadow);color:var(--kn-ink);font-size:12px;line-height:1.55;overflow-wrap:anywhere;pointer-events:none;z-index:2147483007;opacity:0;transform:translateX(6px);transition:opacity .16s ease,transform .16s ease}',
         '.knest-toast[data-show="true"]{opacity:1;transform:none}',
+        /* 拖动时的字数提示：贴在指针旁，告诉用户已经选中多少字 */
+        '.knest-drag-hint{position:fixed;z-index:2147483006;padding:4px 9px;border-radius:999px;border:1px solid var(--kn-echo);background:var(--kn-panel);color:var(--kn-echo);font-size:11px;line-height:1.5;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.28);opacity:0;transform:translateY(-3px);transition:opacity .12s ease,transform .12s ease}',
+        '.knest-drag-hint[data-show="true"]{opacity:1;transform:none}',
+        /* 设置面板：注入到宿主页面里的配置浮层 */
+        '.knest-gear{position:fixed;right:18px;bottom:18px;z-index:2147483005;width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:50%;border:1px solid var(--kn-rule);background:var(--kn-panel);color:var(--kn-mute);font-size:15px;line-height:1;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.28);transition:color .15s ease,border-color .15s ease,transform .15s ease}',
+        '.knest-gear:hover{color:var(--kn-ink);border-color:var(--kn-echo);transform:rotate(35deg)}',
+        /* 右侧竖条入口：贴在窗口右边缘，比角落小圆点显眼得多 */
+        '.knest-edge-tab{position:fixed;right:2px;top:34%;z-index:2147483005;display:flex;align-items:center;justify-content:center;padding:18px 8px;border:1px solid var(--kn-echo);border-right:0;border-radius:11px 0 0 11px;background:color-mix(in srgb,var(--kn-echo) 14%,var(--kn-panel));color:var(--kn-echo);cursor:pointer;font:inherit;box-shadow:-2px 0 16px rgba(0,0,0,.28);transition:padding .18s ease,background .18s ease}',
+        '.knest-edge-tab:hover{padding-right:14px;background:color-mix(in srgb,var(--kn-echo) 24%,var(--kn-panel))}',
+        '.knest-edge-tab[data-open="true"]{color:var(--kn-echo);border-color:var(--kn-echo)}',
+        '.knest-edge-tab span{display:block;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:.26em;font-size:11.5px;line-height:1;white-space:nowrap}',
+        '.knest-edge-tab[data-alert="1"]::after{content:"";position:absolute;top:8px;right:7px;width:7px;height:7px;border-radius:50%;background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.22);animation:knest-pulse 1.8s ease-in-out infinite}',
+        '@keyframes knest-pulse{0%,100%{opacity:1}50%{opacity:.35}}',
+        '.knest-settings{position:fixed;right:18px;bottom:62px;width:352px;max-height:calc(100vh - 110px);overflow:auto;z-index:2147483004;background:var(--kn-panel);border:1px solid var(--kn-rule);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.42);color:var(--kn-ink);font-size:12.5px;line-height:1.6;padding:14px 16px 16px;display:none}',
+        '.knest-settings[data-open="true"]{display:block}',
+        '.knest-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}',
+        '.knest-set-head b{font-size:13px;font-weight:600}',
+        '.knest-set-x{background:transparent;border:0;color:var(--kn-mute);font-size:17px;line-height:1;cursor:pointer;padding:2px 4px}',
+        '.knest-set-x:hover{color:var(--kn-ink)}',
+        '.knest-set-status{background:rgba(127,127,127,.08);border:1px solid var(--kn-rule);border-radius:8px;padding:8px 10px;margin-bottom:12px;font-size:11.5px}',
+        '.knest-set-status b{color:var(--kn-echo);font-weight:500}',
+        '.knest-set-path{color:var(--kn-mute);font-size:10.5px;overflow-wrap:anywhere;margin-top:4px}',
+        '.knest-set-presets{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:12px}',
+        '.knest-set-presets button{text-align:left;background:transparent;border:1px solid var(--kn-rule);border-radius:8px;padding:7px 9px;cursor:pointer;color:var(--kn-ink);font:inherit;transition:border-color .15s ease}',
+        '.knest-set-presets button:hover{border-color:var(--kn-echo)}',
+        '.knest-set-presets button[data-on="1"]{border-color:var(--kn-echo);background:var(--kn-echo-soft)}',
+        '.knest-set-presets b{display:block;font-size:12px;font-weight:600;margin-bottom:1px}',
+        '.knest-set-presets span{display:block;color:var(--kn-mute);font-size:10.5px;line-height:1.45}',
+        '.knest-set-fields label{display:block;margin-bottom:9px;color:var(--kn-mute);font-size:11px}',
+        '.knest-set-fields input{width:100%;margin-top:3px;background:rgba(0,0,0,.22);border:1px solid var(--kn-rule);border-radius:7px;color:var(--kn-ink);padding:6px 8px;font:inherit;font-size:12px;outline:none}',
+        '.knest-set-fields input:focus{border-color:var(--kn-echo)}',
+        '.knest-set-key-row[data-optional="1"]{opacity:.6}',
+        '.knest-set-actions{display:flex;gap:8px;margin-top:4px}',
+        '.knest-set-actions button{flex:1;border-radius:8px;padding:7px 10px;font:inherit;font-size:12px;cursor:pointer;border:1px solid var(--kn-rule);background:transparent;color:var(--kn-ink)}',
+        '.knest-set-actions button.knest-set-save{background:var(--kn-echo);border-color:var(--kn-echo);color:#08130d;font-weight:600}',
+        '.knest-set-actions button:disabled{opacity:.5;cursor:default}',
+        '.knest-set-msg{margin-top:10px;font-size:11.5px;white-space:pre-wrap;word-break:break-all;display:none}',
+        '.knest-set-msg[data-kind="ok"]{display:block;color:var(--kn-echo)}',
+        '.knest-set-msg[data-kind="bad"]{display:block;color:#ff6b6b}',
         '.knest-switch-btn{display:flex;flex-direction:column;align-items:center;gap:9px;padding:13px 4px;background:var(--kn-panel);color:var(--kn-mute);border:1px solid var(--kn-rule);border-radius:0;cursor:pointer;font:inherit;transition:transform .16s ease,color .16s ease,border-color .16s ease}',
         '.knest-switch-btn:hover{transform:translateX(-3px);color:var(--kn-ink);border-color:var(--kn-signal)}',
         '.knest-switch-btn:focus-visible{outline:1px solid var(--kn-signal);outline-offset:-3px}',
@@ -2619,8 +2659,10 @@
         '.knest-chip:hover:not(:disabled){background:var(--kn-echo-soft);border-color:var(--kn-echo)}',
         '.knest-chip:disabled{color:var(--kn-mute);opacity:.55;cursor:default}',
         '.knest-tnode-foot{margin-top:8px;font-size:10.5px;color:var(--kn-mute);font-variant-numeric:tabular-nums}',
-        '.knest-board-hud{position:absolute;left:16px;bottom:16px;top:auto;right:auto;display:flex;align-items:center;gap:2px;padding:3px;pointer-events:auto;background:color-mix(in srgb,var(--kn-panel) 88%,transparent);border:1px solid var(--kn-rule);box-shadow:var(--kn-shadow);opacity:.72;transition:opacity .14s ease}',
+        '.knest-board-hud{position:absolute;right:16px;bottom:16px;top:auto;left:auto;display:flex;align-items:center;gap:2px;padding:3px;pointer-events:auto;background:color-mix(in srgb,var(--kn-panel) 92%,transparent);border:1px solid var(--kn-rule);box-shadow:var(--kn-shadow);opacity:.72;transition:opacity .14s ease;cursor:grab;user-select:none;touch-action:none}',
         '.knest-board-hud:hover{opacity:1}',
+        '.knest-board-hud[data-dragging="true"]{cursor:grabbing;opacity:1}',
+        '.knest-board-hud .knest-hud-btn{cursor:pointer}',
         '.knest-hud-btn{width:24px;height:24px;border:0;background:none;color:var(--kn-mute);font:14px/1 ui-sans-serif,system-ui;cursor:pointer;padding:0;border-radius:4px}',
         '.knest-hud-btn:hover{color:var(--kn-ink);background:var(--kn-echo-soft)}',
 
@@ -3982,6 +4024,79 @@
 
           hud = el('div', { class: 'knest-board-hud' }, [exportBtn, reset, clear]);
 
+          /* HUD 可拖动：宿主底部常有自己的工具条，固定位置迟早被挡。
+             拖过之后位置记在 localStorage，下次还在这儿。 */
+          const hudKey = 'knest.hud.pos';
+          const restoreHud = () => {
+            try {
+              const raw = doc?.defaultView?.localStorage?.getItem(hudKey);
+              if (typeof raw !== 'string' || raw === '') return;
+              const pos = JSON.parse(raw);
+              if (Number.isFinite(pos?.left) && Number.isFinite(pos?.top)) {
+                hud.style.left = `${Math.round(pos.left)}px`;
+                hud.style.top = `${Math.round(pos.top)}px`;
+                hud.style.right = 'auto';
+                hud.style.bottom = 'auto';
+              }
+            } catch {
+              /* 忽略 */
+            }
+          };
+          restoreHud();
+
+          let hudDrag = null;
+          const onHudMove = (event) => {
+            if (hudDrag === null) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const dx = event.clientX - hudDrag.startX;
+            const dy = event.clientY - hudDrag.startY;
+            const box = stage?.getBoundingClientRect?.() ?? { width: 1280, height: 800 };
+            const width = hud.offsetWidth || 90;
+            const height = hud.offsetHeight || 28;
+            const left = Math.min(Math.max(4, hudDrag.originLeft + dx), (Number(box.width) || 1280) - width - 4);
+            const top = Math.min(Math.max(4, hudDrag.originTop + dy), (Number(box.height) || 800) - height - 4);
+            hud.style.left = `${Math.round(left)}px`;
+            hud.style.top = `${Math.round(top)}px`;
+            hud.style.right = 'auto';
+            hud.style.bottom = 'auto';
+          };
+          const onHudUp = (event) => {
+            if (hudDrag === null) return;
+            hudDrag = null;
+            hud.setAttribute('data-dragging', 'false');
+            doc?.removeEventListener?.('pointermove', onHudMove, true);
+            doc?.removeEventListener?.('pointerup', onHudUp, true);
+            try {
+              const box = hud.getBoundingClientRect();
+              const stageBox = stage?.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+              doc?.defaultView?.localStorage?.setItem(hudKey, JSON.stringify({
+                left: box.left - stageBox.left,
+                top: box.top - stageBox.top,
+              }));
+            } catch {
+              /* 忽略 */
+            }
+            event.preventDefault();
+            event.stopPropagation();
+          };
+          hud.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0) return;
+            /* 点在按钮上就别拖，留给按钮自己处理 */
+            if (event.target?.closest?.('.knest-hud-btn') !== null) return;
+            const box = hud.getBoundingClientRect();
+            const stageBox = stage?.getBoundingClientRect?.() ?? { left: 0, top: 0 };
+            hudDrag = {
+              startX: event.clientX,
+              startY: event.clientY,
+              originLeft: box.left - stageBox.left,
+              originTop: box.top - stageBox.top,
+            };
+            hud.setAttribute('data-dragging', 'true');
+            doc?.addEventListener?.('pointermove', onHudMove, true);
+            doc?.addEventListener?.('pointerup', onHudUp, true);
+          });
+
           stage = el('div', { class: 'knest-board-main' }, [world, hud]);
           /* 挂载时必须先藏起来：没有这个初始属性，隐藏规则匹配不上，HUD 会一直露在左下角。 */
           root = el('div', { class: 'knest-board', id: 'knest-board', 'data-open': 'false' }, [stage]);
@@ -4009,6 +4124,9 @@
         };
 
 
+        /** 待执行的那一帧；null 表示当前帧没人排队。 */
+        let dragFrame = null;
+
         function startNodeDrag(event, id) {
           if (event.button !== 0) return;
           event.preventDefault();
@@ -4016,6 +4134,7 @@
           const node = get(id);
           if (node === null) return;
           const group = selected.has(id) && selected.size > 1 ? [...selected] : [id];
+          const stageTop = (stage ?? root)?.getBoundingClientRect?.()?.top ?? 0;
           drag = {
             kind: 'node',
             id,
@@ -4023,8 +4142,11 @@
             origins: group.map((item) => ({ id: item, x: get(item)?.x ?? 0, y: get(item)?.y ?? 0 })),
             startX: event.clientX,
             startY: event.clientY,
+            lastX: event.clientX,
+            lastY: event.clientY,
             originX: node.x,
             originY: node.y,
+            minScreenY: stageTop + 80,
           };
           root?.setAttribute('data-dragging', 'true');
           doc?.addEventListener?.('pointermove', onPointerMove, true);
@@ -4044,7 +4166,7 @@
           const alt = event.altKey === true;
           const middle = event.button === 1;
           if (!alt && !middle) return;
-          drag = { kind: 'pan', startX: event.clientX, startY: event.clientY, originX: panX, originY: panY };
+          drag = { kind: 'pan', startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, originX: panX, originY: panY, minScreenY: null };
           root.setAttribute('data-dragging', 'true');
           doc?.addEventListener?.('pointermove', onPointerMove, true);
           doc?.addEventListener?.('pointerup', onPointerUp, true);
@@ -4053,38 +4175,64 @@
 
         function onPointerMove(event) {
           if (drag === null) return;
-          const dx = event.clientX - drag.startX;
-          const dy = event.clientY - drag.startY;
+          /* 只记住最新位置，真正的计算丢到下一帧做。
+             原来的写法是每个 pointermove 都全量算一遍，高刷鼠标一秒能触发一百多次，
+             再叠上 syncEdges 被调用两次，就成了肉眼可见的一顿一顿。 */
+          drag.lastX = event.clientX;
+          drag.lastY = event.clientY;
+          if (dragFrame !== null) return;
+          dragFrame = (doc?.defaultView?.requestAnimationFrame ?? ((fn) => setTimeout(fn, 16)))(() => {
+            dragFrame = null;
+            applyDragFrame();
+          });
+        }
+
+        /**
+         * 按最新指针位置重排卡片。一帧只跑一次。
+         * @returns {void}
+         */
+        function applyDragFrame() {
+          if (drag === null) return;
+          const dx = drag.lastX - drag.startX;
+          const dy = drag.lastY - drag.startY;
+
           if (drag.kind === 'pan') {
             panX = drag.originX + dx;
             panY = drag.originY + dy;
             applyView();
             return;
           }
+
           const node = get(drag.id);
           if (node === null) return;
-          const snap = (value) => (event.altKey === true ? Math.round(value) : Math.round(value / 12) * 12);
+
           const stepX = dx / scale;
           const stepY = dy / scale;
+          /* 顶部禁区的世界坐标下界，拖动开始时就算好，不必每帧重新量 DOM */
+          const minWorldY = drag.minScreenY === null ? null : (drag.minScreenY - panY) / scale;
+
           for (const origin of drag.origins ?? [{ id: drag.id, x: drag.originX, y: drag.originY }]) {
             const target = get(origin.id);
             if (target === null) continue;
-            target.x = snap(origin.x + stepX);
-            target.y = snap(origin.y + stepY);
+            /* 不再磁吸：以前按 12px 取整，拖起来是跳格的。现在跟手就是一像素一像素走。 */
+            let nextX = origin.x + stepX;
+            let nextY = origin.y + stepY;
+            if (minWorldY !== null && nextY < minWorldY) nextY = minWorldY;
+            target.x = nextX;
+            target.y = nextY;
             positionNode(target);
           }
-          syncEdges();
-          /* 顶部禁区：世界坐标下 titlebar 不得高于 TOP_GUARD */
-          const stageTop = (stage ?? root)?.getBoundingClientRect?.()?.top ?? 0;
-          const minScreenY = stageTop + 80;
-          const screenY = node.y * scale + panY;
-          if (screenY < minScreenY) node.y = Math.round((minScreenY - panY) / scale);
-          positionNode(node);
+          /* 全组位置都定了再连一次线；原来是边改边连、还连了两遍 */
           syncEdges();
         }
 
         function onPointerUp() {
           if (drag === null) return;
+          if (dragFrame !== null) {
+            (doc?.defaultView?.cancelAnimationFrame ?? clearTimeout)(dragFrame);
+            dragFrame = null;
+            applyDragFrame();
+          }
           const draggedId = drag.kind === 'node' ? drag.id : null;
           drag = null;
           if (draggedId !== null) {
