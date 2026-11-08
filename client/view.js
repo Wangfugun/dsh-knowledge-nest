@@ -1621,6 +1621,16 @@ export function createPlugin(env) {
         /* 老宿主没有 settings.section：视图照常工作 */
       }
 
+      /* 右下角的词林入口：宿主设置里没有外观选项，这里单独给一个。
+         纯 DOM 实现，不占 React 树；dispose 时一并摘掉。 */
+      let lookFab = null;
+      try {
+        lookFab = mountLookFab({ doc: globalThis.document, win: globalThis });
+      } catch {
+        /* 没有 body 的极老宿主直接跳过，不影响圈词 */
+      }
+
+
       /* 会话一切换，把那个会话的节点取出来。 */
       const reload = (sessionId) => {
         store.patch({ sessionId, nodes: nodesOfSession(readMapStore(globalThis), sessionId), cards: {}, activeId: '' });
@@ -1635,7 +1645,8 @@ export function createPlugin(env) {
       /* 卸载：手势、快捷键、右键、主题、三块浮层一起摘，不留野监听。 */
       try {
         ctx.on?.('dispose', () => {
-          disposeSelector();
+          lookFab?.dispose?.();
+        disposeSelector();
           disposeTheme();
           doc?.removeEventListener?.('contextmenu', onContextMenu, true);
           doc?.removeEventListener?.('keydown', onShortcutKey, true);
