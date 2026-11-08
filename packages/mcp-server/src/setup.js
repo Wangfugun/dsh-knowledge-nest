@@ -446,6 +446,9 @@ export async function startSetupServer(options = {}) {
             mode: body?.mode ?? 'default',
             model: body?.model ?? '',
             force: body?.force === true,
+            /* 语言与字数：面板切了语言，解释就用那个语言答 */
+            lang: body?.lang,
+            limit: body?.limit,
           });
           json(200, {
             ok: true,
