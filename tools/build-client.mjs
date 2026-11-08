@@ -43,7 +43,20 @@ const SOURCES = [
 ];
 
 /**
- * 装配自检：`client/` 里的每个 .js 都必须在 SOURCES 里。
+ * 不进 DSH 包的模块。
+ *
+ * - `client/standalone.js`：独立注入版的外壳，不依赖 React，也不该混进 DSH 的 bundle；
+ * - `client/settings.js`：设置面板，只有独立版用它（DSH 版走宿主自己的界面）。
+ *
+ * 这两个由 `tools/build-standalone.mjs` 单独打包成 `client-standalone.js`。
+ */
+const STANDALONE_ONLY = [
+  'client/standalone.js',
+  'client/settings.js',
+];
+
+/**
+ * 装配自检：`client/` 里的每个 .js 要么在 SOURCES 里，要么在 STANDALONE_ONLY 里。
  *
  * 这条是踩过坑之后加的——actions.js 曾经漏登记，bundle 里函数"被引用但未定义"，
  * 点菜单才炸，而所有测试都照常通过。宁可 build 失败，也不要静默生成残缺包。
@@ -55,7 +68,7 @@ function missingSources() {
   const onDisk = fs.readdirSync(dir)
     .filter((name) => name.endsWith('.js'))
     .map((name) => `client/${name}`);
-  return onDisk.filter((relative) => !SOURCES.includes(relative));
+  return onDisk.filter((relative) => !SOURCES.includes(relative) && !STANDALONE_ONLY.includes(relative));
 }
 
 const OPEN = `// GENERATED FILE —— 由 tools/build-client.mjs 从 client/*.js 生成，不要手改。
